@@ -33,6 +33,11 @@ def main() -> None:
     )
     parser.add_argument("--sentry-org", default=os.environ.get("SENTRY_ORG", "chat94"))
     parser.add_argument("--sentry-project", default=os.environ.get("SENTRY_PROJECT", "chat94-cli"))
+    parser.add_argument(
+        "--tag",
+        default="latest",
+        help="npm dist-tag to publish under (default: latest).",
+    )
     args = parser.parse_args()
 
     if not args.prepare_only:
@@ -60,7 +65,7 @@ def main() -> None:
         print("Dry run complete. No package was published.")
         return
 
-    run(["npm", "publish", "--access", "public"])
+    run(["npm", "publish", "--access", "public", "--tag", args.tag])
 
 
 def read_local_dsn() -> str:
