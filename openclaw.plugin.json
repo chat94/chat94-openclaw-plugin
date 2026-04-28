@@ -1,0 +1,68 @@
+{
+  "id": "chat94",
+  "channels": ["chat94"],
+  "channelConfigs": {
+    "chat94": {
+      "label": "chat94",
+      "description": "Encrypted relay connection for paired chat94 devices.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "pairingLogLevel": { "type": "string", "enum": ["info", "debug"] },
+          "runtimeLogLevel": { "type": "string", "enum": ["info", "debug"] },
+          "releaseChannel": { "type": "string" },
+          "groupKey": { "type": "string" },
+          "pairKey": { "type": "string" },
+          "defaultAccount": { "type": "string" },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["open", "pairing", "disabled"]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "textChunkLimit": { "type": "integer" },
+          "blockStreaming": { "type": "boolean" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "pairingLogLevel": { "type": "string", "enum": ["info", "debug"] },
+                "runtimeLogLevel": { "type": "string", "enum": ["info", "debug"] },
+                "releaseChannel": { "type": "string" },
+                "groupKey": { "type": "string" },
+                "pairKey": { "type": "string" },
+                "dmPolicy": {
+                  "type": "string",
+                  "enum": ["open", "pairing", "disabled"]
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "textChunkLimit": { "type": "integer" },
+                "blockStreaming": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "channelEnvVars": {
+    "chat94": [
+      "CHAT94_GROUP_KEY"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

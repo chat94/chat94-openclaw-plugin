@@ -1,0 +1,61 @@
+{
+  "name": "@chat94/openclaw-plugin",
+  "version": "1.0.0",
+  "description": "OpenClaw channel plugin for chat94 — routes messages through E2E encrypted relay",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "files": [
+    "README.md",
+    "index.ts",
+    "channel-plugin-api.ts",
+    "openclaw.plugin.json",
+    "src/**/*.ts"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepare-release": "python3.12 scripts/publish_npm.py --prepare-only --from-file",
+    "publish:npm": "python3.12 scripts/publish_npm.py",
+    "publish:npm:dry-run": "python3.12 scripts/publish_npm.py --dry-run",
+    "build": "tsc",
+    "test": "vitest run --project unit",
+    "test:contract": "vitest run --project contract",
+    "test:all": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "chat94",
+      "label": "chat94",
+      "selectionLabel": "chat94 (iOS/macOS app)",
+      "detailLabel": "chat94",
+      "docsPath": "/channels/chat94",
+      "docsLabel": "chat94",
+      "blurb": "Connect your chat94 iOS/macOS app via encrypted relay",
+      "systemImage": "iphone",
+      "order": 80
+    },
+    "install": {
+      "minHostVersion": ">=2026.4.1"
+    }
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@sentry/node": "^8.55.1",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.20.0"
+  }
+}
