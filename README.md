@@ -1,25 +1,30 @@
+<div align="center">
+
 # chat94 OpenClaw Plugin
 
-Connect your chat94 iPhone or Mac app to your OpenClaw agent. Messages flow over an end-to-end encrypted relay — the relay sees ciphertext only, never your conversations.
+Connect your **chat94** iPhone or Mac app to your **OpenClaw** agent.
+End-to-end encrypted — the relay sees ciphertext only, never your conversations.
+
+[![npm](https://img.shields.io/npm/v/@chat94/openclaw-plugin?color=brightgreen&label=npm)](https://www.npmjs.com/package/@chat94/openclaw-plugin)
+[![license](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](./LICENSE)
+[![openclaw](https://img.shields.io/badge/openclaw-%E2%89%A52026.4.1-orange)](https://openclaw.com)
+[![status](https://img.shields.io/badge/status-active-success)](#)
+
+</div>
+
+---
 
 ## Install
 
 ```bash
-# 1. Install the plugin
 openclaw plugin install @chat94/openclaw-plugin
-
-# 2. Restart the OpenClaw gateway (however you run it)
-#    docker restart openclaw-gateway
-#    or kill and rerun: openclaw gateway run
-
-# 3. Pair with your chat94 app
+openclaw gateway restart
 openclaw chat94 setup
-
-# 4. Verify it's running
-openclaw chat94 status
 ```
 
-`setup` walks you through generating a local key and pairing with your device. After that the plugin auto-connects whenever the gateway starts.
+That's it. `setup` walks you through generating a local key and pairing with your device. After pairing, the plugin auto-connects whenever the gateway starts.
+
+> **Note** — `gateway restart` works for launchd / systemd / schtasks. If you launched the gateway manually with `openclaw gateway run`, stop and rerun it instead.
 
 To pair another device later:
 
@@ -27,23 +32,37 @@ To pair another device later:
 openclaw chat94 pair
 ```
 
-## Useful commands
+To check it's running:
 
 ```bash
-openclaw chat94 status                 # connection + key info
-openclaw chat94 sessions list          # see OpenClaw sessions
-openclaw chat94 sessions current       # current binding for this account
-openclaw chat94 sessions bind ...      # link a chat94 group to an OpenClaw session
-openclaw chat94 telemetry status       # is telemetry on?
+openclaw chat94 status
 ```
+
+---
+
+## Useful commands
+
+| Command | What it does |
+|---|---|
+| `openclaw chat94 status` | Connection state, key info, account |
+| `openclaw chat94 sessions list` | All OpenClaw sessions you can bind to |
+| `openclaw chat94 sessions current` | Current session binding for this account |
+| `openclaw chat94 sessions bind --group X --session Y` | Link a chat94 group to an OpenClaw session |
+| `openclaw chat94 sessions clear --group X` | Remove a binding |
+| `openclaw chat94 telemetry status` | Is anonymous error reporting on? |
+| `openclaw chat94 pair --pairing-log-level debug` | Pair with verbose logs |
+
+Logs live at `~/.openclaw/plugins/chat94/logs/` — `runtime.log`, `pairing.log`, `errors.log`.
+
+---
 
 ## Telemetry
 
 Anonymous error reports help us fix bugs faster.
 
-**We collect:** crash reports, stack traces, plugin and Node.js version, OS platform/architecture, an anonymous install ID.
+**Collected:** crash reports · stack traces · plugin & Node.js version · OS platform · anonymous install ID
 
-**We do NOT collect:** message content, AI prompts or responses, command-line arguments, environment variables, file paths containing your identity, API keys or credentials, your name, email, username, or IP address.
+**Never collected:** message content · AI prompts or responses · CLI args · env vars · file paths with your identity · API keys · your name, email, username, IP
 
 Disable any time:
 
@@ -53,17 +72,21 @@ export CHAT94_TELEMETRY_DISABLED=1              # session
 openclaw chat94 --no-telemetry <command>        # one command
 ```
 
-Privacy policy: https://chat94.com/privacy
+Privacy policy → <https://chat94.com/privacy>
+
+---
 
 ## Building from source
 
 ```bash
+git clone git@github.com:chat94/chat94-openclaw-plugin.git
+cd chat94-openclaw-plugin
 npm install
 npm run build
 npm test
 ```
 
-For release builds with Sentry telemetry baked in:
+For a release build with Sentry telemetry baked in:
 
 ```bash
 mkdir -p ~/.config/chat94
@@ -72,9 +95,14 @@ npm run prepare-release
 npm run build
 ```
 
-`prepare-release` writes `src/telemetry-dsn.generated.ts` (gitignored, but included in the published package).
+`prepare-release` writes `src/telemetry-dsn.generated.ts` (gitignored, included in the npm package).
 
-## License
+---
 
-GPL-3.0-or-later — see [LICENSE](./LICENSE).
-Copyright © 2026 NeonNode Limited.
+<div align="center">
+
+**License** — [GPL-3.0-or-later](./LICENSE) · Copyright © 2026 NeonNode Limited
+
+[chat94.com](https://chat94.com) · [Privacy](https://chat94.com/privacy) · [Terms](https://chat94.com/terms)
+
+</div>
