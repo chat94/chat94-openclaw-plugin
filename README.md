@@ -17,22 +17,41 @@ An OpenClaw channel plugin that routes messages between your OpenClaw agent and 
 ## 🚀 Install
 
 ```sh
-openclaw plugin install @chat94/openclaw-plugin
+openclaw plugins install @chat94/openclaw-plugin
 openclaw gateway restart
 openclaw chat94 setup
 ```
 
 `setup` writes a local key, then walks you through pairing — host a room (prints code + QR for your phone) or join one with a code from another device. After pairing, the plugin auto-connects whenever the gateway starts.
 
+**Pin a specific version or dist-tag:**
+```sh
+openclaw plugins install @chat94/openclaw-plugin@1.0.0
+openclaw plugins install @chat94/openclaw-plugin@test     # pre-release channel
+```
+
 **From source:**
 ```sh
 git clone https://github.com/chat94/chat94-openclaw-plugin
 cd chat94-openclaw-plugin
 npm install && npm run build
-openclaw plugin install $(pwd)
+openclaw plugins install $(pwd)
 ```
 
-> **Note** — `openclaw gateway restart` works for launchd / systemd / schtasks. If you started the gateway with `openclaw gateway run` in a terminal, stop it (Ctrl+C) and rerun.
+> **Note** — `openclaw gateway restart` works for launchd / systemd / schtasks. If you started the gateway with `openclaw gateway run` in a terminal, stop it (Ctrl+C) and rerun. Inside a Docker container, `gateway restart` won't work — restart the container instead (`docker restart <name>`).
+
+---
+
+## 🔄 Update
+
+```sh
+openclaw plugins update @chat94/openclaw-plugin            # latest tracked version
+openclaw plugins update @chat94/openclaw-plugin@1.0.1      # exact version
+openclaw plugins update @chat94/openclaw-plugin@test       # latest test build
+openclaw gateway restart
+```
+
+Pass the **full npm spec** (with dist-tag or version) — `openclaw plugins update chat94 --version X` is **not** a valid syntax. Update preserves your local state (keys, pairing, session bindings); only the plugin code is replaced.
 
 ---
 

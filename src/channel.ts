@@ -21,6 +21,7 @@ import { randomUUID } from "node:crypto";
 
 const STREAM_FLUSH_MIN_CHARS = 200;
 const STREAM_FLUSH_DELAY_MS = 100;
+const DEFERRED_DELIVERY_RECOVERY_INTERVAL_MS = 5_000;
 
 // Lazy-load runtime to avoid pulling in WebSocket/crypto on import
 let channelRuntimePromise: Promise<typeof import("./channel-runtime.js")> | undefined;
@@ -108,6 +109,10 @@ export const chat94Plugin = {
     },
   },
 
+  conversationBindings: {
+    supportsCurrentConversationBinding: true,
+  },
+
   // ─── Config ─────────────────────────────────────────────────────────────
 
   config: {
@@ -183,9 +188,35 @@ export const chat94Plugin = {
 
       const {
         monitorChat94Provider,
+        recoverQueuedChat94Deliveries,
         registerSender,
         unregisterSender,
       } = await loadChannelRuntime();
+
+      let deferredDeliveryRecoveryTimer: NodeJS.Timeout | undefined;
+
+      const stopDeferredDeliveryRecovery = () => {
+        if (!deferredDeliveryRecoveryTimer) {
+          return;
+        }
+        clearInterval(deferredDeliveryRecoveryTimer);
+        deferredDeliveryRecoveryTimer = undefined;
+      };
+
+      const runDeferredDeliveryRecovery = async () => {
+        try {
+          await recoverQueuedChat94Deliveries({
+            cfg: ctx.cfg,
+            accountId: ctx.account.accountId,
+            groupId: ctx.account.groupId,
+            log: ctx.log,
+          });
+        } catch (error) {
+          ctx.log?.warn?.(
+            `[${ctx.account.accountId}] queued chat94 delivery recovery failed: ${String(error)}`,
+          );
+        }
+      };
 
       await monitorChat94Provider({
         accountId: ctx.account.accountId,
@@ -193,6 +224,11 @@ export const chat94Plugin = {
         abortSignal: ctx.abortSignal,
         onConnected: (send) => {
           registerSender(ctx.account, send);
+          stopDeferredDeliveryRecovery();
+          void runDeferredDeliveryRecovery();
+          deferredDeliveryRecoveryTimer = setInterval(() => {
+            void runDeferredDeliveryRecovery();
+          }, DEFERRED_DELIVERY_RECOVERY_INTERVAL_MS);
           ctx.setStatus({
             accountId: ctx.account.accountId,
             name: `chat94 (${ctx.account.groupId.substring(0, 8)}...)`,
@@ -202,6 +238,7 @@ export const chat94Plugin = {
           });
         },
         onDisconnected: () => {
+          stopDeferredDeliveryRecovery();
           unregisterSender(ctx.account.groupId);
           ctx.setStatus({
             accountId: ctx.account.accountId,
@@ -429,7 +466,7 @@ export const chat94Plugin = {
             clearFlushTimer();
             streamBuffer = "";
             if (streamActive && lastText.length > 0) {
-              sendStreamEnd(ctx.account.groupId, streamId, lastText);
+              sendStreamEnd(ctx.account.groupId, streamId, lastText, { reset: true });
             }
             streamId = randomUUID();
             streamActive = false;
@@ -521,7 +558,9 @@ export const chat94Plugin = {
                   flushBufferedStream();
                   const finalText = text || lastText;
                   if (finalText.length > 0) {
-                    sendStreamEnd(ctx.account.groupId, streamId, finalText);
+                    sendStreamEnd(ctx.account.groupId, streamId, finalText, {
+                      notifyIfOffline: true,
+                    });
                   }
                   finalizeStreamingState();
                   finalSent = true;
@@ -608,6 +647,8 @@ export const chat94Plugin = {
         },
         log: ctx.log as MonitorOptions["log"],
       });
+
+      stopDeferredDeliveryRecovery();
     },
   },
 

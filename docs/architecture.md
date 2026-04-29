@@ -22,6 +22,7 @@ Important implementation boundary:
 - the relay/session transport supports `text`, `text_delta`, `text_end`, and `status`
 - the current OpenClaw outbound adapter invokes `sendText()` and URL-style `sendMedia()`
 - streaming and status transport primitives exist in code, but host-side callback wiring is still incomplete
+- deferred chat94 replies can also arrive through OpenClaw's generic `delivery-queue`; the plugin now runs a recovery loop while connected so queued chat94 payloads are replayed directly over the live relay sender
 
 ## Folder Structure
 
@@ -167,6 +168,20 @@ Transport helpers in `src/send.ts`:
 
 These are implemented at the relay transport layer. They are not yet fully invoked by the OpenClaw outbound adapter in `src/channel.ts`.
 
+### Deferred / Queued Outbound Recovery
+
+```text
+OpenClaw async reply path
+  -> writes delivery-queue/*.json for channel=chat94
+  -> plugin recovery loop sees a live chat94 sender
+  -> matching queued payloads are replayed with sendMessageChat94()
+  -> recovered queue file is deleted
+```
+
+This path matters for:
+- queued "while agent was busy" replies
+- other deferred chat94 deliveries that the host chooses to enqueue
+
 ### Inbound Text
 
 ```text
@@ -289,11 +304,11 @@ OpenClaw-facing plugin surface:
 - config resolution/description
 - gateway lifecycle
 - outbound `sendText()` and `sendMedia()`
+- deferred delivery recovery while connected
 
 Current limitations:
 - no host-side streaming integration yet
-- no host-side CLI registration yet
-- inbound messages are observed, but full OpenClaw dispatch integration remains TODO
+- queued recovery currently replays text plus media-URL fallback from `delivery-queue`; it does not reconstruct richer channel-native attachments
 
 ### `src/channel-runtime.ts`
 

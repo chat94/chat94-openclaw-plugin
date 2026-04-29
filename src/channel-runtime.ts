@@ -10,3 +10,4 @@ export {
   registerSender,
   unregisterSender,
 } from "./send.js";
+export { recoverQueuedChat94Deliveries } from "./deferred-delivery.js";

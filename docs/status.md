@@ -28,7 +28,7 @@ Status values:
 | `3.4` | Pairing proof generation | Implemented | Proof generation and verification helpers exist in `src/crypto.ts`. |
 | `3.5` | Wrapped-key handling | Implemented | X25519 + XChaCha20-Poly1305 wrap/unwrap helpers exist and are tested. |
 | `4.1` | Inbound text | Partial | Monitor layer parses and exposes inbound `text`, but full host dispatch is still TODO in `src/channel.ts`. |
-| `4.2` | Outbound text | Implemented | `sendMessageChat94()` wired through outbound adapter. |
+| `4.2` | Outbound text | Implemented | `sendMessageChat94()` is wired through the normal outbound adapter, and queued chat94 replies are now recovered from OpenClaw's `delivery-queue` while connected. |
 | `4.3` | Streaming text | Partial | Transport helpers exist, but host outbound streaming integration is not wired. |
 | `4.4` | Status signaling | Partial | Transport helper exists, but host integration is not wired. |
 | `4.5` | Typing signals | Implemented | Empty-payload relay typing envelopes supported. |
@@ -36,7 +36,7 @@ Status values:
 | `5.1` | Channel registration | Implemented | Channel surface exported as `chat94`. |
 | `5.2` | Account configuration surface | Implemented | Resolve/describe/configured-state behavior exists. |
 | `5.3` | Gateway lifecycle | Implemented | Per-account gateway startup exists. |
-| `5.4` | Outbound adapter | Partial | `sendText()` and URL-based `sendMedia()` exist; richer content and streaming hooks do not. |
+| `5.4` | Outbound adapter | Partial | `sendText()` and URL-based `sendMedia()` exist; queued/deferred chat94 replies are replayed from `delivery-queue`, but richer content and full host-managed streaming hooks still do not exist. |
 | `5.5` | Inbound dispatch | Not Implemented | `src/channel.ts` still contains TODO integration comments rather than host dispatch. |
 | `5.6` | Runtime-safe loading | Implemented | Lazy runtime loading via `src/channel-runtime.ts`. |
 | `5.7` | Pairing workflow surface | Implemented | Host/operator workflows now exist via `openclaw chat94 setup|pair|status`, with `pair` non-interactive by default and `setup --no-pair` supported. |

@@ -142,6 +142,7 @@ export type InnerAudioBody = {
   waveform: number[];
 };
 export type InnerDeltaBody = { delta: string };
+export type InnerTextEndBody = { text: string; reset?: boolean };
 export type InnerStatusBody = { status: "thinking" | "typing" | "idle" };
 
 // ─── Inbound (from iPhone) ──────────────────────────────────────────────────

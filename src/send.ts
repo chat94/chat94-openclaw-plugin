@@ -102,6 +102,8 @@ function sendInnerMessage(
     inner_t: t,
     from_role: innerMessage.from?.role,
     from_device_id: innerMessage.from?.device_id,
+    notify_if_offline: opts?.notifyIfOffline ? true : false,
+    ...(typeof body.reset === "boolean" ? { reset: body.reset } : {}),
   });
 
   return messageId;
@@ -131,8 +133,17 @@ export function sendStreamDelta(groupId: string, streamId: string, delta: string
   sendInnerMessage(groupId, "text_delta", { delta }, streamId);
 }
 
-export function sendStreamEnd(groupId: string, streamId: string, fullText: string): void {
-  sendInnerMessage(groupId, "text_end", { text: fullText }, streamId);
+export function sendStreamEnd(
+  groupId: string,
+  streamId: string,
+  fullText: string,
+  opts?: { notifyIfOffline?: boolean; reset?: boolean },
+): void {
+  const body: Record<string, unknown> = { text: fullText };
+  if (opts?.reset) {
+    body.reset = true;
+  }
+  sendInnerMessage(groupId, "text_end", body, streamId, opts);
 }
 
 export function sendStatus(groupId: string, status: "thinking" | "typing" | "idle"): void {
