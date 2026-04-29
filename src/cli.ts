@@ -28,15 +28,12 @@ type PluginApiLike = {
   ) => void;
 };
 
-type SetupCommandOptions = {
+type PairCommandOptions = {
   account?: string;
   pairingLogLevel?: "info" | "debug";
   runtimeLogLevel?: "info" | "debug";
   noPair?: boolean;
   pair?: boolean;
-};
-
-type PairCommandOptions = SetupCommandOptions & {
   code?: string;
 };
 
@@ -59,24 +56,15 @@ export function registerChat94Cli(api: PluginApiLike): void {
         .option("--no-telemetry", "Disable anonymous error reporting for this run");
 
       chat94
-        .command("setup")
-        .description("Interactive first-time setup and pairing")
-        .option("--account <id>", "Account id", "default")
-        .option("--pairing-log-level <level>", "Pairing log level (info|debug)")
-        .option("--runtime-log-level <level>", "Runtime log level (info|debug)")
-        .option("--no-pair", "Save config and local key without starting pairing")
-        .action(async (opts: SetupCommandOptions) => {
-          await runInteractiveSetup(api, opts).catch(handleCliError);
-        });
-
-      chat94
         .command("pair")
-        .description("Start a new pairing session for another client")
+        .description("Configure chat94 (if needed) and start a pairing session for a client")
         .option("--account <id>", "Account id", "default")
         .option("--code <value>", "Explicit pairing code")
         .option("--pairing-log-level <level>", "Pairing log level (info|debug)")
+        .option("--runtime-log-level <level>", "Runtime log level (info|debug)")
+        .option("--no-pair", "Save config and local key without starting pairing")
         .action(async (opts: PairCommandOptions) => {
-          await runPairingCommand(api, opts).catch(handleCliError);
+          await runPairCommand(api, opts).catch(handleCliError);
         });
 
       chat94
@@ -202,60 +190,40 @@ export function registerChat94Cli(api: PluginApiLike): void {
   );
 }
 
-async function runInteractiveSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<void> {
+async function runPairCommand(api: PluginApiLike, opts: PairCommandOptions): Promise<boolean> {
   const cfg = loadConfig(api);
-  const account = resolveChat94Account({
+  const before = resolveChat94Account({
     cfg: cfg as { channels?: Record<string, unknown> },
     accountId: opts.account,
   });
+  const beforeConfigured = before.configured;
 
-  const pairingLogLevel = normalizePairingLogLevel(opts.pairingLogLevel ?? account.pairingLogLevel);
-  const runtimeLogLevel = normalizePairingLogLevel(opts.runtimeLogLevel ?? account.runtimeLogLevel);
+  const pairingLogLevel = normalizePairingLogLevel(opts.pairingLogLevel ?? before.pairingLogLevel);
+  const runtimeLogLevel = normalizePairingLogLevel(opts.runtimeLogLevel ?? before.runtimeLogLevel);
 
   await writeChannelConfig(api, {
-    accountId: account.accountId,
+    accountId: before.accountId,
     pairingLogLevel,
     runtimeLogLevel,
   });
-  ensureLocalKeyForAccount(account);
 
-  output.write("Saved chat94 settings.\n");
+  const groupKeyBytes = ensureLocalKeyForAccount(before);
+
   if (shouldSkipPairing(opts)) {
-    output.write('Skipped pairing.\nNext step: "openclaw chat94 pair"\n');
-    return;
+    output.write("Saved chat94 settings.\n");
+    output.write(restartHint(beforeConfigured));
+    output.write('Next step: "openclaw chat94 pair"\n');
+    return true;
   }
 
-  const paired = await runPairingCommand(api, {
-    account: account.accountId,
-    pairingLogLevel,
-  });
-  if (!paired) {
-    return;
-  }
-}
-
-async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): Promise<boolean> {
-  const cfg = loadConfig(api);
-  const account = resolveChat94Account({
-    cfg: cfg as { channels?: Record<string, unknown> },
-    accountId: opts.account,
-  });
-  const pairingLogLevel = normalizePairingLogLevel(opts.pairingLogLevel ?? account.pairingLogLevel);
-  await writeChannelConfig(api, {
-    accountId: account.accountId,
-    pairingLogLevel,
-    runtimeLogLevel: account.runtimeLogLevel,
-  });
   const code = opts.code?.trim() || generatePairingCode();
-
-  const groupKeyBytes = ensureLocalKeyForAccount(account);
 
   output.write(`Pairing code: ${code}\n`);
   output.write(`${renderPairingCodeBanner(code)}\n`);
   await renderQrIfAvailable(buildPairingQrPayload({ code }));
 
   const result = await hostPairingSession({
-    relayUrl: account.relayUrl,
+    relayUrl: before.relayUrl,
     groupKeyBytes,
     code,
     logLevel: pairingLogLevel,
@@ -265,7 +233,7 @@ async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): 
   }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     const logPath = dumpChat94Trace("cli-pair", error, {
-      accountId: account.accountId,
+      accountId: before.accountId,
       code,
       pairingLogLevel,
     });
@@ -285,9 +253,21 @@ async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): 
     return false;
   }
 
+  const after = resolveChat94Account({
+    cfg: loadConfig(api) as { channels?: Record<string, unknown> },
+    accountId: before.accountId,
+  });
   output.write(`Pairing room: ${result.roomId}\n`);
-  output.write(`Connected group: ${resolveChat94Account({ cfg: cfg as { channels?: Record<string, unknown> }, accountId: account.accountId }).groupId || "(local key ready)"}\n`);
+  output.write(`Connected group: ${after.groupId || "(local key ready)"}\n`);
+  output.write(restartHint(beforeConfigured));
   return true;
+}
+
+function restartHint(beforeConfigured: boolean): string {
+  if (beforeConfigured) {
+    return "Gateway already serves chat94 — no restart needed.\n";
+  }
+  return 'Restart the gateway to start serving chat94: "openclaw gateway restart"\n';
 }
 
 async function runListSessions(api: PluginApiLike, opts: SessionListOptions): Promise<void> {
@@ -410,7 +390,7 @@ function loadConfig(api: PluginApiLike): Record<string, unknown> {
   return api.runtime?.config?.loadConfig?.() ?? api.config ?? {};
 }
 
-function shouldSkipPairing(opts: SetupCommandOptions): boolean {
+function shouldSkipPairing(opts: PairCommandOptions): boolean {
   return opts.noPair === true || opts.pair === false;
 }
 

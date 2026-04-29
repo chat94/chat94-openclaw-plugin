@@ -1,3 +1,4 @@
+import { watch, type FSWatcher } from "node:fs";
 import { resolveChat94Account } from "./accounts.js";
 import { connectOnce } from "./monitor-websocket.js";
 import { decrypt } from "./crypto.js";
@@ -37,30 +38,93 @@ export type MonitorOptions = {
  * Returns when abortSignal fires.
  */
 export async function monitorChat94Provider(opts: MonitorOptions): Promise<void> {
-  const account = resolveChat94Account({
+  const initialAccount = resolveChat94Account({
     cfg: opts.config,
     accountId: opts.accountId,
   });
 
-  if (!account.configured) {
+  if (!initialAccount.configured) {
     throw new Error(
-      `chat94 not configured for account "${account.accountId}". Run "openclaw chat94 setup".`,
+      `chat94 not configured for account "${initialAccount.accountId}". Run "openclaw chat94 pair".`,
     );
   }
 
-  const runtimeLogger = new RuntimeLogger(account.runtimeLogLevel, {
-    accountId: account.accountId,
-    groupId: account.groupId,
+  const runtimeLogger = new RuntimeLogger(initialAccount.runtimeLogLevel, {
+    accountId: initialAccount.accountId,
+    groupId: initialAccount.groupId,
   });
 
   let currentSend: ((envelope: RelayEnvelope) => void) | undefined;
+  let activeReconnectAbort: AbortController | undefined;
+  let lastSeenGroupId = initialAccount.groupId;
+
+  // Watch the on-disk key file so an external `keys new` / re-pair flips the
+  // active connection to the new room without requiring a gateway restart.
+  let keyFileWatcher: FSWatcher | undefined;
+  try {
+    keyFileWatcher = watch(initialAccount.keyFilePath, () => {
+      try {
+        const refreshed = resolveChat94Account({
+          cfg: opts.config,
+          accountId: opts.accountId,
+        });
+        if (!refreshed.configured) return;
+        if (refreshed.groupId === lastSeenGroupId) return;
+        runtimeLogger.info("runtime.key_changed", {
+          old_group_id: lastSeenGroupId,
+          new_group_id: refreshed.groupId,
+        });
+        opts.log?.info?.(
+          `[${refreshed.accountId}] chat94 key changed → reconnecting (group ${refreshed.groupId.substring(0, 8)}...)`,
+        );
+        activeReconnectAbort?.abort();
+      } catch {
+        // Ignore — the next reconnect will surface real errors.
+      }
+    });
+  } catch {
+    // File watcher is best-effort; absence just means manual restart on key change.
+  }
+
+  opts.abortSignal?.addEventListener(
+    "abort",
+    () => {
+      keyFileWatcher?.close();
+    },
+    { once: true },
+  );
 
   const createConnectOnce = () => {
+    // Re-resolve account on every connect attempt so reconnects (after key
+    // rotation, file watcher, or transient errors) pick up the latest key.
+    const account = resolveChat94Account({
+      cfg: opts.config,
+      accountId: opts.accountId,
+    });
+    if (!account.configured) {
+      throw new Error(
+        `chat94 not configured for account "${account.accountId}". Run "openclaw chat94 pair".`,
+      );
+    }
+    lastSeenGroupId = account.groupId;
+
+    // Per-connection abort: parent abort still tears everything down, but the
+    // key-file watcher can also fire this to force just one reconnect.
+    const localAbort = new AbortController();
+    activeReconnectAbort = localAbort;
+    if (opts.abortSignal) {
+      if (opts.abortSignal.aborted) {
+        localAbort.abort();
+      } else {
+        opts.abortSignal.addEventListener("abort", () => localAbort.abort(), { once: true });
+      }
+    }
+
     const connectOpts = {
       relayUrl: account.relayUrl,
       groupId: account.groupId,
       releaseChannel: account.config.releaseChannel,
-      abortSignal: opts.abortSignal,
+      abortSignal: localAbort.signal,
       onWsOpen: () => {
         runtimeLogger.info("runtime.ws_open");
       },
@@ -262,19 +326,25 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
       },
     };
 
-    return () => connectOnce(connectOpts);
+    return connectOnce(connectOpts);
   };
 
-  await runWithReconnect(createConnectOnce(), {
-    abortSignal: opts.abortSignal,
-    onError: (err) => {
-      dumpChat94Trace("relay-monitor", err, {
-        accountId: account.accountId,
-      });
-      opts.log?.error?.(`[${account.accountId}] Relay error: ${err}`);
-    },
-    onReconnect: (delayMs) => {
-      opts.log?.info?.(`[${account.accountId}] Reconnecting in ${Math.round(delayMs)}ms...`);
-    },
-  });
+  try {
+    await runWithReconnect(createConnectOnce, {
+      abortSignal: opts.abortSignal,
+      onError: (err) => {
+        dumpChat94Trace("relay-monitor", err, {
+          accountId: initialAccount.accountId,
+        });
+        opts.log?.error?.(`[${initialAccount.accountId}] Relay error: ${err}`);
+      },
+      onReconnect: (delayMs) => {
+        opts.log?.info?.(
+          `[${initialAccount.accountId}] Reconnecting in ${Math.round(delayMs)}ms...`,
+        );
+      },
+    });
+  } finally {
+    keyFileWatcher?.close();
+  }
 }

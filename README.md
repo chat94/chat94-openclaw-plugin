@@ -18,11 +18,11 @@ An OpenClaw channel plugin that routes messages between your OpenClaw agent and 
 
 ```sh
 openclaw plugins install @chat94/openclaw-plugin
+openclaw chat94 pair
 openclaw gateway restart
-openclaw chat94 setup
 ```
 
-`setup` writes a local key, then walks you through pairing — host a room (prints code + QR for your phone) or join one with a code from another device. After pairing, the plugin auto-connects whenever the gateway starts.
+`pair` configures chat94 if it's not already set up, generates a local key (only on first run), then walks you through pairing — prints a code + QR for your phone. On subsequent runs (same key, already configured) it just hosts a fresh pairing session for an additional device. The plugin auto-connects whenever the gateway starts.
 
 **Pin a specific version or dist-tag:**
 ```sh
@@ -58,8 +58,8 @@ Pass the **full npm spec** (with dist-tag or version) — `openclaw plugins upda
 ## ⚡ Commands
 
 ```sh
-openclaw chat94 setup                    # first-time install + pair
-openclaw chat94 pair                     # add another device
+openclaw chat94 pair                     # configure (if needed) + pair a device
+openclaw chat94 pair --no-pair           # configure + create key only, no pairing
 openclaw chat94 status                   # connection + key info
 openclaw chat94 sessions list            # OpenClaw sessions you can bind to
 openclaw chat94 sessions current         # current binding
