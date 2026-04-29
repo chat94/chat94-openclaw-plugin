@@ -3,6 +3,14 @@
   "version": "1.0.0-test.8",
   "description": "OpenClaw channel plugin for chat4000 — routes messages through E2E encrypted relay",
   "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chat4000/chat4000-openclaw-plugin.git"
+  },
+  "homepage": "https://github.com/chat4000/chat4000-openclaw-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/chat4000/chat4000-openclaw-plugin/issues"
+  },
   "type": "module",
   "files": [
     "README.md",
