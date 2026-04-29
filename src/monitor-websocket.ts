@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { dumpChat94Trace } from "./error-log.js";
+import { dumpChat4000Trace } from "./error-log.js";
 import { readPackageVersion } from "./package-info.js";
 import type {
   RelayEnvelope,
@@ -132,7 +132,7 @@ export function connectOnce(opts: ConnectOnceOptions): Promise<void> {
       opts.onDisconnected?.();
       if (!opened) {
         const error = new Error("WebSocket closed before hello_ok");
-        dumpChat94Trace("relay-connect-close", error, {
+        dumpChat4000Trace("relay-connect-close", error, {
           groupId: opts.groupId,
         });
         reject(error);
@@ -144,7 +144,7 @@ export function connectOnce(opts: ConnectOnceOptions): Promise<void> {
     ws.on("error", (err) => {
       stopKeepalive();
       opts.onDisconnected?.();
-      dumpChat94Trace("relay-connect-error", err, {
+      dumpChat4000Trace("relay-connect-error", err, {
         groupId: opts.groupId,
       });
       if (!opened) {

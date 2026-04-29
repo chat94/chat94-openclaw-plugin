@@ -23,11 +23,11 @@ describe("crypto", () => {
   const key = Buffer.alloc(32, 0x11);
 
   it("encrypt and decrypt roundtrip", () => {
-    const plaintext = Buffer.from("hello from Chat94");
+    const plaintext = Buffer.from("hello from Chat4000");
     const { nonce, ciphertext } = encrypt(plaintext, key);
     const decrypted = decrypt(nonce, ciphertext, key);
     expect(decrypted).not.toBeNull();
-    expect(decrypted!.toString("utf-8")).toBe("hello from Chat94");
+    expect(decrypted!.toString("utf-8")).toBe("hello from Chat4000");
   });
 
   it("wrong key fails to decrypt", () => {
@@ -54,7 +54,7 @@ describe("crypto", () => {
   });
 
   it("formatGroupQrUrl uses base64url key", () => {
-    expect(formatGroupQrUrl(key)).toBe(`chat94://pair/${key.toString("base64url")}`);
+    expect(formatGroupQrUrl(key)).toBe(`chat4000://pair/${key.toString("base64url")}`);
     expect(formatPairQrUrl(key)).toBe(formatGroupQrUrl(key));
   });
 

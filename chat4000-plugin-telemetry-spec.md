@@ -1,15 +1,15 @@
-# chat94-plugin: Sentry Telemetry Implementation Spec
+# chat4000-plugin: Sentry Telemetry Implementation Spec
 
 ## Overview
 
-chat94-plugin sends anonymous error reports through Sentry. Telemetry is on by default, with a first-run terminal notice and multiple opt-out paths.
+chat4000-plugin sends anonymous error reports through Sentry. Telemetry is on by default, with a first-run terminal notice and multiple opt-out paths.
 
 ## Collected
 
 - crash reports and stack traces
 - handled exceptions
 - plugin version, Node.js version, OS platform and architecture
-- anonymous install ID stored at `~/.config/chat94/install-id`
+- anonymous install ID stored at `~/.config/chat4000/install-id`
 
 ## Never Collected
 
@@ -26,25 +26,25 @@ chat94-plugin sends anonymous error reports through Sentry. Telemetry is on by d
 Persistent:
 
 ```bash
-openclaw chat94 telemetry disable
+openclaw chat4000 telemetry disable
 ```
 
 Environment:
 
 ```bash
-CHAT94_TELEMETRY_DISABLED=1
+CHAT4000_TELEMETRY_DISABLED=1
 ```
 
 Single invocation:
 
 ```bash
-openclaw chat94 --no-telemetry <command>
+openclaw chat4000 --no-telemetry <command>
 ```
 
 ## Files
 
 ```text
-~/.config/chat94/
+~/.config/chat4000/
 ├── install-id
 ├── notice-shown
 └── telemetry-enabled
@@ -56,7 +56,7 @@ Sentry is initialized only when telemetry is enabled and the built-in runtime DS
 
 Sentry auth tokens, project creation credentials, and release-upload credentials must stay outside the repository and are never shipped with the plugin.
 
-Local release builds read the DSN from `~/.config/chat94/sentry-dsn` and generate `src/telemetry-dsn.generated.ts` with:
+Local release builds read the DSN from `~/.config/chat4000/sentry-dsn` and generate `src/telemetry-dsn.generated.ts` with:
 
 ```bash
 npm run prepare-release

@@ -28,7 +28,7 @@ type SessionStoreEntry = {
 
 type StoredBindingsFile = {
   version: 1;
-  bindings: Record<string, Chat94SessionBinding>;
+  bindings: Record<string, Chat4000SessionBinding>;
 };
 
 export type OpenClawSessionCandidate = {
@@ -45,7 +45,7 @@ export type OpenClawSessionCandidate = {
   lastAccountId?: string;
 };
 
-export type Chat94SessionBinding = {
+export type Chat4000SessionBinding = {
   accountId: string;
   groupId: string;
   targetSessionKey: string;
@@ -60,7 +60,7 @@ export type Chat94SessionBinding = {
 };
 
 function resolveBindingsFilePath(): string {
-  return path.join(resolveOpenClawStateDir(), "plugins", "chat94", "session-bindings.json");
+  return path.join(resolveOpenClawStateDir(), "plugins", "chat4000", "session-bindings.json");
 }
 
 function normalizeNonEmptyString(value: unknown): string | undefined {
@@ -276,7 +276,7 @@ function loadBindingsFile(): StoredBindingsFile {
     if (parsed.version !== 1 || !parsed.bindings || typeof parsed.bindings !== "object") {
       return { version: 1, bindings: {} };
     }
-    return { version: 1, bindings: parsed.bindings as Record<string, Chat94SessionBinding> };
+    return { version: 1, bindings: parsed.bindings as Record<string, Chat4000SessionBinding> };
   } catch {
     return { version: 1, bindings: {} };
   }
@@ -300,22 +300,22 @@ function resolveBindingKey(accountId: string, groupId: string): string {
   return `${accountId.trim() || "default"}:${groupId.trim()}`;
 }
 
-export function getChat94SessionBinding(params: {
+export function getChat4000SessionBinding(params: {
   accountId: string;
   groupId: string;
-}): Chat94SessionBinding | null {
+}): Chat4000SessionBinding | null {
   const key = resolveBindingKey(params.accountId, params.groupId);
   return loadBindingsFile().bindings[key] ?? null;
 }
 
-export function setChat94SessionBinding(params: {
+export function setChat4000SessionBinding(params: {
   accountId: string;
   groupId: string;
   target: OpenClawSessionCandidate;
-}): Chat94SessionBinding {
+}): Chat4000SessionBinding {
   const store = loadBindingsFile();
   const key = resolveBindingKey(params.accountId, params.groupId);
-  const binding: Chat94SessionBinding = {
+  const binding: Chat4000SessionBinding = {
     accountId: params.accountId,
     groupId: params.groupId,
     targetSessionKey: params.target.sessionKey,
@@ -333,7 +333,7 @@ export function setChat94SessionBinding(params: {
   return binding;
 }
 
-export function clearChat94SessionBinding(params: {
+export function clearChat4000SessionBinding(params: {
   accountId: string;
   groupId: string;
 }): boolean {

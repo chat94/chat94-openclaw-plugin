@@ -2,6 +2,7 @@ import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { resolveOpenClawHome } from "./key-store.js";
+import { rolloverIfTooLarge } from "./log-rotate.js";
 
 export type RuntimeLogLevel = "info" | "debug";
 
@@ -11,7 +12,7 @@ export type RuntimeLoggerContext = {
 };
 
 function resolveRuntimeLogPath(): string {
-  return path.join(resolveOpenClawHome(), "plugins", "chat94", "logs", "runtime.log");
+  return path.join(resolveOpenClawHome(), "plugins", "chat4000", "logs", "runtime.log");
 }
 
 function nowTimestamp(): string {
@@ -74,6 +75,7 @@ export class RuntimeLogger {
 
     try {
       mkdirSync(path.dirname(this.logPath), { recursive: true });
+      rolloverIfTooLarge(this.logPath);
       appendFileSync(this.logPath, `${line}\n`, {
         encoding: "utf8",
         mode: 0o600,

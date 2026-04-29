@@ -3,6 +3,7 @@ import path from "node:path";
 import { threadId } from "node:worker_threads";
 import type { RelayEnvelope, RelayPairCancelPayload, RelayPairDataPayload } from "./types.js";
 import { resolveOpenClawHome } from "./key-store.js";
+import { rolloverIfTooLarge } from "./log-rotate.js";
 
 export type PairingLogLevel = "info" | "debug";
 
@@ -12,7 +13,7 @@ export type PairingLoggerContext = {
 };
 
 function resolvePairingLogPath(): string {
-  return path.join(resolveOpenClawHome(), "plugins", "chat94", "logs", "pairing.log");
+  return path.join(resolveOpenClawHome(), "plugins", "chat4000", "logs", "pairing.log");
 }
 
 function nowTimestamp(): string {
@@ -132,6 +133,7 @@ export class PairingLogger {
     const line = `${nowTimestamp()} [tid:${threadId}] ${level} ${event}${details ? ` ${details}` : ""}`;
 
     mkdirSync(path.dirname(this.logPath), { recursive: true });
+    rolloverIfTooLarge(this.logPath);
     appendFileSync(this.logPath, `${line}\n`, {
       encoding: "utf8",
       mode: 0o600,

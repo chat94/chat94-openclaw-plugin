@@ -1,14 +1,14 @@
 import { watch, type FSWatcher } from "node:fs";
-import { resolveChat94Account } from "./accounts.js";
+import { resolveChat4000Account } from "./accounts.js";
 import { connectOnce } from "./monitor-websocket.js";
 import { decrypt } from "./crypto.js";
-import { dumpChat94Trace } from "./error-log.js";
+import { dumpChat4000Trace } from "./error-log.js";
 import { runWithReconnect } from "./reconnect.js";
 import { RuntimeLogger } from "./runtime-logger.js";
 import type {
   RelayEnvelope,
   RelayMsgPayload,
-  Chat94InboundMessage,
+  Chat4000InboundMessage,
   InnerAudioBody,
   InnerDeltaBody,
   InnerImageBody,
@@ -21,7 +21,7 @@ export type MonitorOptions = {
   accountId?: string;
   config: { channels?: Record<string, unknown> };
   abortSignal?: AbortSignal;
-  onMessage?: (message: Chat94InboundMessage, send: (envelope: RelayEnvelope) => void) => void | Promise<void>;
+  onMessage?: (message: Chat4000InboundMessage, send: (envelope: RelayEnvelope) => void) => void | Promise<void>;
   onConnected?: (send: (envelope: RelayEnvelope) => void) => void;
   onDisconnected?: () => void;
   log?: {
@@ -37,15 +37,15 @@ export type MonitorOptions = {
  * Handles reconnection with exponential backoff.
  * Returns when abortSignal fires.
  */
-export async function monitorChat94Provider(opts: MonitorOptions): Promise<void> {
-  const initialAccount = resolveChat94Account({
+export async function monitorChat4000Provider(opts: MonitorOptions): Promise<void> {
+  const initialAccount = resolveChat4000Account({
     cfg: opts.config,
     accountId: opts.accountId,
   });
 
   if (!initialAccount.configured) {
     throw new Error(
-      `chat94 not configured for account "${initialAccount.accountId}". Run "openclaw chat94 pair".`,
+      `chat4000 not configured for account "${initialAccount.accountId}". Run "openclaw chat4000 pair".`,
     );
   }
 
@@ -64,7 +64,7 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
   try {
     keyFileWatcher = watch(initialAccount.keyFilePath, () => {
       try {
-        const refreshed = resolveChat94Account({
+        const refreshed = resolveChat4000Account({
           cfg: opts.config,
           accountId: opts.accountId,
         });
@@ -75,7 +75,7 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
           new_group_id: refreshed.groupId,
         });
         opts.log?.info?.(
-          `[${refreshed.accountId}] chat94 key changed → reconnecting (group ${refreshed.groupId.substring(0, 8)}...)`,
+          `[${refreshed.accountId}] chat4000 key changed → reconnecting (group ${refreshed.groupId.substring(0, 8)}...)`,
         );
         activeReconnectAbort?.abort();
       } catch {
@@ -97,13 +97,13 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
   const createConnectOnce = () => {
     // Re-resolve account on every connect attempt so reconnects (after key
     // rotation, file watcher, or transient errors) pick up the latest key.
-    const account = resolveChat94Account({
+    const account = resolveChat4000Account({
       cfg: opts.config,
       accountId: opts.accountId,
     });
     if (!account.configured) {
       throw new Error(
-        `chat94 not configured for account "${account.accountId}". Run "openclaw chat94 pair".`,
+        `chat4000 not configured for account "${account.accountId}". Run "openclaw chat4000 pair".`,
       );
     }
     lastSeenGroupId = account.groupId;
@@ -184,7 +184,7 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
         }
 
         if (inner.t === "text") {
-          const inbound: Chat94InboundMessage = {
+          const inbound: Chat4000InboundMessage = {
             messageId: inner.id,
             innerType: "text",
             text: (inner.body as InnerTextBody).text,
@@ -210,7 +210,7 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
             return;
           }
 
-          const inbound: Chat94InboundMessage = {
+          const inbound: Chat4000InboundMessage = {
             messageId: inner.id,
             innerType: "image",
             dataBase64,
@@ -254,7 +254,7 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
             return;
           }
 
-          const inbound: Chat94InboundMessage = {
+          const inbound: Chat4000InboundMessage = {
             messageId: inner.id,
             innerType: "audio",
             dataBase64,
@@ -333,7 +333,7 @@ export async function monitorChat94Provider(opts: MonitorOptions): Promise<void>
     await runWithReconnect(createConnectOnce, {
       abortSignal: opts.abortSignal,
       onError: (err) => {
-        dumpChat94Trace("relay-monitor", err, {
+        dumpChat4000Trace("relay-monitor", err, {
           accountId: initialAccount.accountId,
         });
         opts.log?.error?.(`[${initialAccount.accountId}] Relay error: ${err}`);

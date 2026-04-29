@@ -1,30 +1,30 @@
 /**
- * chat94 Channel Plugin for OpenClaw.
+ * chat4000 Channel Plugin for OpenClaw.
  *
- * This plugin connects to a chat94 relay server via WebSocket,
+ * This plugin connects to a chat4000 relay server via WebSocket,
  * routing E2E encrypted messages between the OpenClaw agent and
- * chat94 iOS/macOS apps.
+ * chat4000 iOS/macOS apps.
  *
  * Pattern follows IRC and Mattermost plugins.
  */
 
 import {
-  resolveChat94Account,
+  resolveChat4000Account,
   hasConfiguredState,
-  listChat94AccountIds,
-  getDefaultChat94AccountId,
+  listChat4000AccountIds,
+  getDefaultChat4000AccountId,
 } from "./accounts.js";
-import { getChat94SessionBinding } from "./session-binding.js";
-import type { ResolvedChat94Account, Chat94Probe } from "./types.js";
+import { getChat4000SessionBinding } from "./session-binding.js";
+import type { ResolvedChat4000Account, Chat4000Probe } from "./types.js";
 import { RuntimeLogger } from "./runtime-logger.js";
 import { randomUUID } from "node:crypto";
 
 const STREAM_FLUSH_MIN_CHARS = 200;
 const STREAM_FLUSH_DELAY_MS = 100;
 const DEFERRED_DELIVERY_RECOVERY_INTERVAL_MS = 5_000;
-const CHAT94_TARGET_PREFIX = "chat94:";
+const CHAT4000_TARGET_PREFIX = "chat4000:";
 
-function stripChat94Prefix(value: string | null | undefined): string | undefined {
+function stripChat4000Prefix(value: string | null | undefined): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -32,8 +32,8 @@ function stripChat94Prefix(value: string | null | undefined): string | undefined
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.toLowerCase().startsWith(CHAT94_TARGET_PREFIX)
-    ? trimmed.slice(CHAT94_TARGET_PREFIX.length) || undefined
+  return trimmed.toLowerCase().startsWith(CHAT4000_TARGET_PREFIX)
+    ? trimmed.slice(CHAT4000_TARGET_PREFIX.length) || undefined
     : trimmed;
 }
 
@@ -99,14 +99,14 @@ async function loadMediaRuntime() {
 // This would use createChatChannelPlugin() from openclaw/plugin-sdk/channel-core
 // but since we're building standalone for now, we export the raw structure.
 
-export const chat94Plugin = {
-  id: "chat94" as const,
+export const chat4000Plugin = {
+  id: "chat4000" as const,
 
   meta: {
-    id: "chat94",
-    label: "chat94",
-    selectionLabel: "chat94 (iOS/macOS app)",
-    docsPath: "/channels/chat94",
+    id: "chat4000",
+    label: "chat4000",
+    selectionLabel: "chat4000 (iOS/macOS app)",
+    docsPath: "/channels/chat4000",
     markdownCapable: true,
     capabilities: {
       chatTypes: ["direct" as const],
@@ -119,7 +119,7 @@ export const chat94Plugin = {
       blockStreaming: false,
     },
     reload: {
-      configPrefixes: ["channels.chat94"],
+      configPrefixes: ["channels.chat4000"],
     },
   },
 
@@ -140,10 +140,10 @@ export const chat94Plugin = {
       conversationId?: string | null;
       threadId?: string | null;
     }) => {
-      const id = stripChat94Prefix(threadId)
-        ?? stripChat94Prefix(to)
-        ?? stripChat94Prefix(conversationId)
-        ?? stripChat94Prefix(groupId);
+      const id = stripChat4000Prefix(threadId)
+        ?? stripChat4000Prefix(to)
+        ?? stripChat4000Prefix(conversationId)
+        ?? stripChat4000Prefix(groupId);
       return id ? { conversationId: id } : null;
     },
   },
@@ -158,9 +158,9 @@ export const chat94Plugin = {
       commandTo?: string | null;
       fallbackTo?: string | null;
     }) => {
-      const id = stripChat94Prefix(originatingTo)
-        ?? stripChat94Prefix(commandTo)
-        ?? stripChat94Prefix(fallbackTo);
+      const id = stripChat4000Prefix(originatingTo)
+        ?? stripChat4000Prefix(commandTo)
+        ?? stripChat4000Prefix(fallbackTo);
       return id ? { conversationId: id } : null;
     },
   },
@@ -172,23 +172,23 @@ export const chat94Plugin = {
       hasConfiguredState(env),
 
     listAccountIds: (cfg?: { channels?: Record<string, unknown> }) =>
-      listChat94AccountIds(cfg),
+      listChat4000AccountIds(cfg),
 
     defaultAccountId: (cfg?: { channels?: Record<string, unknown> }) =>
-      getDefaultChat94AccountId(cfg),
+      getDefaultChat4000AccountId(cfg),
 
-    isConfigured: (account: ResolvedChat94Account) => account.configured,
+    isConfigured: (account: ResolvedChat4000Account) => account.configured,
 
     resolveAccount: (
       cfg?: { channels?: Record<string, unknown> },
       accountId?: string | null,
-    ) => resolveChat94Account({ cfg, accountId }),
+    ) => resolveChat4000Account({ cfg, accountId }),
 
     inspectAccount: (
       cfg?: { channels?: Record<string, unknown> },
       accountId?: string | null,
     ) => {
-      const account = resolveChat94Account({ cfg, accountId });
+      const account = resolveChat4000Account({ cfg, accountId });
       return {
         accountId: account.accountId,
         enabled: account.enabled,
@@ -198,8 +198,8 @@ export const chat94Plugin = {
       };
     },
 
-    describeAccount: (account: ResolvedChat94Account) => ({
-      name: `chat94 (${account.groupId.substring(0, 8)}...)`,
+    describeAccount: (account: ResolvedChat4000Account) => ({
+      name: `chat4000 (${account.groupId.substring(0, 8)}...)`,
       configured: account.configured,
       enabled: account.enabled,
       extra: {
@@ -214,7 +214,7 @@ export const chat94Plugin = {
     startAccount: async (ctx: {
       cfg: { channels?: Record<string, unknown> };
       accountId: string;
-      account: ResolvedChat94Account;
+      account: ResolvedChat4000Account;
       channelRuntime?: unknown;
       abortSignal: AbortSignal;
       setStatus: (next: unknown) => void;
@@ -227,20 +227,20 @@ export const chat94Plugin = {
     }) => {
       if (!ctx.account.configured) {
         throw new Error(
-          `chat94 not configured for account "${ctx.account.accountId}". ` +
-          `Run "openclaw chat94 setup" to create the local key and finish setup.`
+          `chat4000 not configured for account "${ctx.account.accountId}". ` +
+          `Run "openclaw chat4000 setup" to create the local key and finish setup.`
         );
       }
 
-      ctx.log?.info?.(`[${ctx.account.accountId}] Starting chat94 channel`);
+      ctx.log?.info?.(`[${ctx.account.accountId}] Starting chat4000 channel`);
       const runtimeLogger = new RuntimeLogger(ctx.account.runtimeLogLevel, {
         accountId: ctx.account.accountId,
         groupId: ctx.account.groupId,
       });
 
       const {
-        monitorChat94Provider,
-        recoverQueuedChat94Deliveries,
+        monitorChat4000Provider,
+        recoverQueuedChat4000Deliveries,
         registerSender,
         unregisterSender,
       } = await loadChannelRuntime();
@@ -257,7 +257,7 @@ export const chat94Plugin = {
 
       const runDeferredDeliveryRecovery = async () => {
         try {
-          await recoverQueuedChat94Deliveries({
+          await recoverQueuedChat4000Deliveries({
             cfg: ctx.cfg,
             accountId: ctx.account.accountId,
             groupId: ctx.account.groupId,
@@ -265,12 +265,12 @@ export const chat94Plugin = {
           });
         } catch (error) {
           ctx.log?.warn?.(
-            `[${ctx.account.accountId}] queued chat94 delivery recovery failed: ${String(error)}`,
+            `[${ctx.account.accountId}] queued chat4000 delivery recovery failed: ${String(error)}`,
           );
         }
       };
 
-      await monitorChat94Provider({
+      await monitorChat4000Provider({
         accountId: ctx.account.accountId,
         config: ctx.cfg,
         abortSignal: ctx.abortSignal,
@@ -283,7 +283,7 @@ export const chat94Plugin = {
           }, DEFERRED_DELIVERY_RECOVERY_INTERVAL_MS);
           ctx.setStatus({
             accountId: ctx.account.accountId,
-            name: `chat94 (${ctx.account.groupId.substring(0, 8)}...)`,
+            name: `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`,
             enabled: true,
             configured: true,
             extra: { connected: true },
@@ -294,7 +294,7 @@ export const chat94Plugin = {
           unregisterSender(ctx.account.groupId);
           ctx.setStatus({
             accountId: ctx.account.accountId,
-            name: `chat94 (${ctx.account.groupId.substring(0, 8)}...)`,
+            name: `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`,
             enabled: true,
             configured: true,
             extra: { connected: false },
@@ -312,9 +312,9 @@ export const chat94Plugin = {
             return;
           }
 
-          const senderAddress = `chat94:${ctx.account.groupId}`;
-          const recipientAddress = "chat94:agent";
-          const conversationLabel = `chat94 (${ctx.account.groupId.substring(0, 8)}...)`;
+          const senderAddress = `chat4000:${ctx.account.groupId}`;
+          const recipientAddress = "chat4000:agent";
+          const conversationLabel = `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`;
           const runtime = ctx.channelRuntime as {
             routing: {
               resolveAgentRoute: (params: {
@@ -355,11 +355,11 @@ export const chat94Plugin = {
           };
           const route = runtime.routing.resolveAgentRoute({
             cfg: ctx.cfg,
-            channel: "chat94",
+            channel: "chat4000",
             accountId: ctx.account.accountId,
             peer: { kind: "direct", id: ctx.account.groupId },
           });
-          const boundSession = getChat94SessionBinding({
+          const boundSession = getChat4000SessionBinding({
             accountId: ctx.account.accountId,
             groupId: ctx.account.groupId,
           });
@@ -389,7 +389,7 @@ export const chat94Plugin = {
                 ? "[Image]"
                 : `[Voice note${message.durationMs > 0 ? ` ${Math.round(message.durationMs / 1000)}s` : ""}]`;
           const body = runtime.reply.formatAgentEnvelope({
-            channel: "chat94",
+            channel: "chat4000",
             from: conversationLabel,
             body: rawBody,
             timestamp: message.timestamp,
@@ -405,7 +405,7 @@ export const chat94Plugin = {
                 message.mimeType,
                 "inbound",
                 undefined,
-                `chat94-${message.messageId}`,
+                `chat4000-${message.messageId}`,
               );
               mediaPayload = buildAgentMediaPayload([
                 {
@@ -426,7 +426,7 @@ export const chat94Plugin = {
               });
               throw error instanceof Error
                 ? error
-                : new Error(`chat94 ${message.innerType} save failed: ${String(error)}`);
+                : new Error(`chat4000 ${message.innerType} save failed: ${String(error)}`);
             }
           }
           const ctxPayload = runtime.reply.finalizeInboundContext({
@@ -441,16 +441,16 @@ export const chat94Plugin = {
             ChatType: "direct",
             ConversationLabel: conversationLabel,
             SenderId: ctx.account.groupId,
-            Provider: "chat94",
-            Surface: "chat94",
+            Provider: "chat4000",
+            Surface: "chat4000",
             MessageSid: message.messageId,
             MessageSidFull: message.messageId,
             Timestamp: message.timestamp,
-            Chat94FromRole: message.from?.role,
-            Chat94FromDeviceId: message.from?.device_id,
-            Chat94FromDeviceName: message.from?.device_name,
+            Chat4000FromRole: message.from?.role,
+            Chat4000FromDeviceId: message.from?.device_id,
+            Chat4000FromDeviceName: message.from?.device_name,
             ...(message.innerType === "audio" ? { AudioDurationMs: message.durationMs } : {}),
-            OriginatingChannel: "chat94",
+            OriginatingChannel: "chat4000",
             OriginatingTo: senderAddress,
             CommandAuthorized: true,
             ...mediaPayload,
@@ -471,7 +471,7 @@ export const chat94Plugin = {
           });
 
           const {
-            sendMessageChat94,
+            sendMessageChat4000,
             sendStatus,
             sendStreamDelta,
             sendStreamEnd,
@@ -563,7 +563,7 @@ export const chat94Plugin = {
           const replyPipeline = createChannelReplyPipeline({
             cfg: ctx.cfg,
             agentId: targetAgentId,
-            channel: "chat94",
+            channel: "chat4000",
             accountId: route.accountId ?? ctx.account.accountId,
             typing: {
               start: () => {
@@ -591,7 +591,7 @@ export const chat94Plugin = {
               });
               throw error instanceof Error
                 ? error
-                : new Error(`chat94 session record failed: ${String(error)}`);
+                : new Error(`chat4000 session record failed: ${String(error)}`);
             },
           });
 
@@ -628,7 +628,7 @@ export const chat94Plugin = {
                   return;
                 }
 
-                await sendMessageChat94(senderAddress, text, {
+                await sendMessageChat4000(senderAddress, text, {
                   cfg: ctx.cfg,
                   accountId: ctx.account.accountId,
                   replyToId: message.messageId,
@@ -713,7 +713,7 @@ export const chat94Plugin = {
       sanitizeText: ({ text }: { text: string }) => text, // No sanitization needed (app handles rendering)
     },
     attachedResults: {
-      channel: "chat94" as const,
+      channel: "chat4000" as const,
       sendText: async (ctx: {
         cfg: { channels?: Record<string, unknown> };
         to: string;
@@ -721,8 +721,8 @@ export const chat94Plugin = {
         accountId?: string;
         replyToId?: string;
       }) => {
-        const { sendMessageChat94 } = await loadChannelRuntime();
-        return await sendMessageChat94(ctx.to, ctx.text, {
+        const { sendMessageChat4000 } = await loadChannelRuntime();
+        return await sendMessageChat4000(ctx.to, ctx.text, {
           cfg: ctx.cfg,
           accountId: ctx.accountId,
           replyToId: ctx.replyToId,
@@ -737,11 +737,11 @@ export const chat94Plugin = {
         replyToId?: string;
       }) => {
         // V1: Send media URL as text. V2: Upload and send inline.
-        const { sendMessageChat94 } = await loadChannelRuntime();
+        const { sendMessageChat4000 } = await loadChannelRuntime();
         const messageText = ctx.mediaUrl
           ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}`
           : ctx.text;
-        return await sendMessageChat94(ctx.to, messageText, {
+        return await sendMessageChat4000(ctx.to, messageText, {
           cfg: ctx.cfg,
           accountId: ctx.accountId,
           replyToId: ctx.replyToId,
@@ -753,5 +753,5 @@ export const chat94Plugin = {
 
 // Type import for monitor options
 type MonitorOptions = Parameters<
-  Awaited<ReturnType<typeof loadChannelRuntime>>["monitorChat94Provider"]
+  Awaited<ReturnType<typeof loadChannelRuntime>>["monitorChat4000Provider"]
 >[0];

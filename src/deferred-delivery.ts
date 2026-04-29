@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { sendMessageChat94 } from "./send.js";
+import { sendMessageChat4000 } from "./send.js";
 import { resolveOpenClawHome } from "./key-store.js";
 
 type QueuedPayload = {
@@ -18,7 +18,7 @@ type QueuedDeliveryEntry = {
   lastError?: unknown;
 };
 
-const RECOVERY_SUFFIX = ".chat94-recovering";
+const RECOVERY_SUFFIX = ".chat4000-recovering";
 
 function resolveDeliveryQueueDir(): string {
   return path.join(resolveOpenClawHome(), "delivery-queue");
@@ -85,19 +85,19 @@ async function restoreQueueEntry(tempPath: string, originalPath: string): Promis
   }
 }
 
-function matchesChat94Entry(
+function matchesChat4000Entry(
   entry: QueuedDeliveryEntry,
   accountId: string,
   groupId: string,
 ): boolean {
   return (
-    entry.channel === "chat94" &&
+    entry.channel === "chat4000" &&
     entry.accountId === accountId &&
-    entry.to === `chat94:${groupId}`
+    entry.to === `chat4000:${groupId}`
   );
 }
 
-export async function recoverQueuedChat94Deliveries(params: {
+export async function recoverQueuedChat4000Deliveries(params: {
   cfg: { channels?: Record<string, unknown> };
   accountId: string;
   groupId: string;
@@ -126,7 +126,7 @@ export async function recoverQueuedChat94Deliveries(params: {
     }
 
     const entry = await readQueueEntry(tempPath);
-    if (!entry || !matchesChat94Entry(entry, params.accountId, params.groupId)) {
+    if (!entry || !matchesChat4000Entry(entry, params.accountId, params.groupId)) {
       await restoreQueueEntry(tempPath, originalPath);
       continue;
     }
@@ -141,7 +141,7 @@ export async function recoverQueuedChat94Deliveries(params: {
         if (!text) {
           continue;
         }
-        await sendMessageChat94(`chat94:${params.groupId}`, text, {
+        await sendMessageChat4000(`chat4000:${params.groupId}`, text, {
           cfg: params.cfg,
           accountId: params.accountId,
         });
@@ -149,12 +149,12 @@ export async function recoverQueuedChat94Deliveries(params: {
       await fs.unlink(tempPath);
       recovered += 1;
       params.log?.info?.(
-        `[${params.accountId}] Recovered queued chat94 delivery ${entry.id}`,
+        `[${params.accountId}] Recovered queued chat4000 delivery ${entry.id}`,
       );
     } catch (error) {
       await restoreQueueEntry(tempPath, originalPath);
       params.log?.warn?.(
-        `[${params.accountId}] Failed to recover queued chat94 delivery ${entry.id}: ${String(error)}`,
+        `[${params.accountId}] Failed to recover queued chat4000 delivery ${entry.id}: ${String(error)}`,
       );
     }
   }

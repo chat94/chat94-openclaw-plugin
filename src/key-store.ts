@@ -12,7 +12,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { deriveGroupId, parseGroupKey } from "./crypto.js";
 
-type StoredChat94KeyFile = {
+type StoredChat4000KeyFile = {
   version: 1;
   accountId: string;
   groupKey: string;
@@ -21,13 +21,13 @@ type StoredChat94KeyFile = {
   updatedAt: string;
 };
 
-export type StoredChat94Key = {
+export type StoredChat4000Key = {
   groupKeyBytes: Buffer;
   groupId: string;
   path: string;
 };
 
-type StoredChat94InstanceFile = {
+type StoredChat4000InstanceFile = {
   version: 1;
   deviceId: string;
   deviceName: string;
@@ -35,15 +35,15 @@ type StoredChat94InstanceFile = {
   updatedAt: string;
 };
 
-export type Chat94InstanceIdentity = {
+export type Chat4000InstanceIdentity = {
   deviceId: string;
   deviceName: string;
   path: string;
 };
 
-let cachedInstanceIdentity: Chat94InstanceIdentity | null = null;
+let cachedInstanceIdentity: Chat4000InstanceIdentity | null = null;
 
-type Chat94StateAccess = {
+type Chat4000StateAccess = {
   stateDir: string;
   pluginDir: string;
   keysDir: string;
@@ -78,8 +78,8 @@ export function resolveOpenClawStateDir(env: NodeJS.ProcessEnv = process.env): s
   return path.join(resolveOpenClawHomeDir(env), ".openclaw");
 }
 
-function resolveChat94PluginDir(): string {
-  return path.join(resolveOpenClawStateDir(), "plugins", "chat94");
+function resolveChat4000PluginDir(): string {
+  return path.join(resolveOpenClawStateDir(), "plugins", "chat4000");
 }
 
 function resolvePreferredOwner(targetPath: string): {
@@ -127,9 +127,9 @@ function applyOwnerIfNeeded(paths: string[], owner: { uid?: number; gid?: number
   }
 }
 
-export function inspectChat94StateAccess(accountId: string): Chat94StateAccess {
+export function inspectChat4000StateAccess(accountId: string): Chat4000StateAccess {
   const stateDir = resolveOpenClawStateDir();
-  const pluginDir = resolveChat94PluginDir();
+  const pluginDir = resolveChat4000PluginDir();
   const keysDir = path.join(pluginDir, "keys");
   const keyFilePath = path.join(keysDir, `${sanitizeAccountId(accountId)}.json`);
   const owner = resolvePreferredOwner(keyFilePath);
@@ -158,23 +158,23 @@ export function resolveOpenClawHome(): string {
   return resolveOpenClawStateDir();
 }
 
-export function resolveChat94KeyFilePath(accountId: string): string {
-  return inspectChat94StateAccess(accountId).keyFilePath;
+export function resolveChat4000KeyFilePath(accountId: string): string {
+  return inspectChat4000StateAccess(accountId).keyFilePath;
 }
 
-function resolveChat94InstanceFilePath(): string {
-  return path.join(resolveChat94PluginDir(), "instance.json");
+function resolveChat4000InstanceFilePath(): string {
+  return path.join(resolveChat4000PluginDir(), "instance.json");
 }
 
-export function loadStoredGroupKey(accountId: string): StoredChat94Key | null {
-  const filePath = resolveChat94KeyFilePath(accountId);
+export function loadStoredGroupKey(accountId: string): StoredChat4000Key | null {
+  const filePath = resolveChat4000KeyFilePath(accountId);
   if (!existsSync(filePath)) {
     return null;
   }
 
   try {
     const raw = readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<StoredChat94KeyFile>;
+    const parsed = JSON.parse(raw) as Partial<StoredChat4000KeyFile>;
     if (parsed.version !== 1 || typeof parsed.groupKey !== "string") {
       return null;
     }
@@ -192,14 +192,14 @@ export function loadStoredGroupKey(accountId: string): StoredChat94Key | null {
   }
 }
 
-export function saveStoredGroupKey(accountId: string, groupKeyBytes: Buffer): StoredChat94Key {
-  const access = inspectChat94StateAccess(accountId);
+export function saveStoredGroupKey(accountId: string, groupKeyBytes: Buffer): StoredChat4000Key {
+  const access = inspectChat4000StateAccess(accountId);
   const filePath = access.keyFilePath;
   mkdirSync(access.keysDir, { recursive: true });
 
   const now = new Date().toISOString();
   const existing = loadStoredGroupKey(accountId);
-  const next: StoredChat94KeyFile = {
+  const next: StoredChat4000KeyFile = {
     version: 1,
     accountId: sanitizeAccountId(accountId),
     groupKey: groupKeyBytes.toString("base64url"),
@@ -229,18 +229,18 @@ export function saveStoredGroupKey(accountId: string, groupKeyBytes: Buffer): St
   };
 }
 
-export function resolveChat94InstanceIdentity(): Chat94InstanceIdentity {
+export function resolveChat4000InstanceIdentity(): Chat4000InstanceIdentity {
   if (cachedInstanceIdentity) {
     return cachedInstanceIdentity;
   }
-  const filePath = resolveChat94InstanceFilePath();
+  const filePath = resolveChat4000InstanceFilePath();
   const preferredOwner = resolvePreferredOwner(filePath);
   const defaultName = os.hostname() || "OpenClaw Plugin";
 
   if (existsSync(filePath)) {
     try {
       const raw = readFileSync(filePath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<StoredChat94InstanceFile>;
+      const parsed = JSON.parse(raw) as Partial<StoredChat4000InstanceFile>;
       if (parsed.version === 1 && typeof parsed.deviceId === "string" && parsed.deviceId.length > 0) {
         cachedInstanceIdentity = {
           deviceId: parsed.deviceId,
@@ -258,7 +258,7 @@ export function resolveChat94InstanceIdentity(): Chat94InstanceIdentity {
   }
 
   const now = new Date().toISOString();
-  const next: StoredChat94InstanceFile = {
+  const next: StoredChat4000InstanceFile = {
     version: 1,
     deviceId: randomUUID(),
     deviceName: defaultName,
@@ -276,7 +276,7 @@ export function resolveChat94InstanceIdentity(): Chat94InstanceIdentity {
     } catch {
       // Best-effort permission tightening.
     }
-    applyOwnerIfNeeded([resolveChat94PluginDir(), filePath], preferredOwner);
+    applyOwnerIfNeeded([resolveChat4000PluginDir(), filePath], preferredOwner);
   } catch {
     // Fall back to process-local identity when persistent storage is unavailable.
   }

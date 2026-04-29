@@ -1,8 +1,8 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
-import { registerChat94Cli } from "./src/cli.js";
-import { initializeChat94Telemetry } from "./src/telemetry.js";
+import { registerChat4000Cli } from "./src/cli.js";
+import { initializeChat4000Telemetry } from "./src/telemetry.js";
 
-initializeChat94Telemetry();
+initializeChat4000Telemetry();
 
 export {
   generateGroupKey,
@@ -22,19 +22,19 @@ export {
 export { joinPairingSession, hostPairingSession } from "./src/pairing.js";
 export {
   loadStoredGroupKey,
-  resolveChat94KeyFilePath,
+  resolveChat4000KeyFilePath,
   resolveOpenClawHome,
   saveStoredGroupKey,
 } from "./src/key-store.js";
 
 export default defineBundledChannelEntry({
-  id: "chat94",
-  name: "chat94",
-  description: "chat94 channel plugin",
+  id: "chat4000",
+  name: "chat4000",
+  description: "chat4000 channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
     specifier: "./channel-plugin-api.js",
-    exportName: "chat94Plugin",
+    exportName: "chat4000Plugin",
   },
-  registerCliMetadata: registerChat94Cli,
+  registerCliMetadata: registerChat4000Cli,
 });

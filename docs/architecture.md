@@ -1,4 +1,4 @@
-# chat94 Plugin — Architecture
+# chat4000 Plugin — Architecture
 
 ## Current State
 
@@ -22,12 +22,12 @@ Important implementation boundary:
 - the relay/session transport supports `text`, `text_delta`, `text_end`, and `status`
 - the current OpenClaw outbound adapter invokes `sendText()` and URL-style `sendMedia()`
 - streaming and status transport primitives exist in code, but host-side callback wiring is still incomplete
-- deferred chat94 replies can also arrive through OpenClaw's generic `delivery-queue`; the plugin now runs a recovery loop while connected so queued chat94 payloads are replayed directly over the live relay sender
+- deferred chat4000 replies can also arrive through OpenClaw's generic `delivery-queue`; the plugin now runs a recovery loop while connected so queued chat4000 payloads are replayed directly over the live relay sender
 
 ## Folder Structure
 
 ```text
-chat94-plugin/
+chat4000-plugin/
 ├── index.ts
 ├── package.json
 ├── openclaw.plugin.json
@@ -80,17 +80,17 @@ OpenClaw plugins run in-process inside the host. This plugin assumes:
 ### Config Model
 
 Resolved connection settings use a fixed relay:
-1. production chat94 relay endpoint
+1. production chat4000 relay endpoint
 
 Resolved key state comes from:
-1. `CHAT94_GROUP_KEY`
-2. `groupKey` in `channels.chat94`
+1. `CHAT4000_GROUP_KEY`
+2. `groupKey` in `channels.chat4000`
 3. legacy config `groupKey`
 4. legacy config `pairKey`
 5. plugin-managed key file
 
 Default key-file path:
-- `~/.openclaw/plugins/chat94/keys/<account>.json`
+- `~/.openclaw/plugins/chat4000/keys/<account>.json`
 
 There is no configurable encryption mode. The protocol is fixed to XChaCha20-Poly1305.
 
@@ -124,7 +124,7 @@ Current handling:
 
 ```text
 channel.gateway.startAccount()
-  -> monitorChat94Provider()
+  -> monitorChat4000Provider()
     -> resolve account
     -> runWithReconnect()
       -> connectOnce()
@@ -149,7 +149,7 @@ Reconnect policy is handled by `src/reconnect.ts`:
 
 ```text
 channel.outbound.sendText()
-  -> sendMessageChat94()
+  -> sendMessageChat4000()
     -> resolve account
     -> fetch active sender by groupId
     -> build inner message { t: "text", id, body, ts }
@@ -172,15 +172,15 @@ These are implemented at the relay transport layer. They are not yet fully invok
 
 ```text
 OpenClaw async reply path
-  -> writes delivery-queue/*.json for channel=chat94
-  -> plugin recovery loop sees a live chat94 sender
-  -> matching queued payloads are replayed with sendMessageChat94()
+  -> writes delivery-queue/*.json for channel=chat4000
+  -> plugin recovery loop sees a live chat4000 sender
+  -> matching queued payloads are replayed with sendMessageChat4000()
   -> recovered queue file is deleted
 ```
 
 This path matters for:
 - queued "while agent was busy" replies
-- other deferred chat94 deliveries that the host chooses to enqueue
+- other deferred chat4000 deliveries that the host chooses to enqueue
 
 ### Inbound Text
 
@@ -210,7 +210,7 @@ Exact pairing crypto in `src/crypto.ts`:
 - pairing room id derivation
 - proof construction using SHA-256 with required `0x00` separators
 - X25519 shared-secret wrapping
-- `wrap_key = sha256(shared_secret || "chat94-pair-wrap-v1")`
+- `wrap_key = sha256(shared_secret || "chat4000-pair-wrap-v1")`
 - XChaCha20-Poly1305 wrapped-key encryption
 
 ## File Responsibilities
@@ -317,7 +317,7 @@ Lazy runtime barrel. This is the boundary that keeps runtime-only modules out of
 ### `index.ts`
 
 Current exports:
-- `chat94Plugin`
+- `chat4000Plugin`
 - group-key helpers
 - legacy pair-key aliases
 - pairing helpers

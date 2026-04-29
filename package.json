@@ -1,7 +1,7 @@
 {
-  "name": "@chat94/openclaw-plugin",
-  "version": "1.0.0-test.7",
-  "description": "OpenClaw channel plugin for chat94 — routes messages through E2E encrypted relay",
+  "name": "@chat4000/openclaw-plugin",
+  "version": "1.0.0-test.8",
+  "description": "OpenClaw channel plugin for chat4000 — routes messages through E2E encrypted relay",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "files": [
@@ -38,13 +38,13 @@
       "./index.ts"
     ],
     "channel": {
-      "id": "chat94",
-      "label": "chat94",
-      "selectionLabel": "chat94 (iOS/macOS app)",
-      "detailLabel": "chat94",
-      "docsPath": "/channels/chat94",
-      "docsLabel": "chat94",
-      "blurb": "Connect your chat94 iOS/macOS app via encrypted relay",
+      "id": "chat4000",
+      "label": "chat4000",
+      "selectionLabel": "chat4000 (iOS/macOS app)",
+      "detailLabel": "chat4000",
+      "docsPath": "/channels/chat4000",
+      "docsLabel": "chat4000",
+      "blurb": "Connect your chat4000 iOS/macOS app via encrypted relay",
       "systemImage": "iphone",
       "order": 80
     },

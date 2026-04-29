@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
 const RELAY_BINARY = process.env.RELAY_BINARY
-  ?? "/tmp/chat94-relay";
+  ?? "/tmp/chat4000-relay";
 
 const BASE_PORT = 17890;
 let portCounter = 0;
@@ -17,7 +17,7 @@ export type RelayInstance = {
 
 export async function startRelay(): Promise<RelayInstance> {
   const port = BASE_PORT + portCounter++;
-  const dataDir = `/tmp/chat94-test-${randomUUID()}`;
+  const dataDir = `/tmp/chat4000-test-${randomUUID()}`;
 
   const proc = spawn(RELAY_BINARY, [], {
     env: {

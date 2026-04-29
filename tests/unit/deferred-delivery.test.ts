@@ -2,23 +2,23 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { recoverQueuedChat94Deliveries } from "../../src/deferred-delivery.js";
+import { recoverQueuedChat4000Deliveries } from "../../src/deferred-delivery.js";
 
-const { sendMessageChat94 } = vi.hoisted(() => ({
-  sendMessageChat94: vi.fn(),
+const { sendMessageChat4000 } = vi.hoisted(() => ({
+  sendMessageChat4000: vi.fn(),
 }));
 
 vi.mock("../../src/send.js", () => ({
-  sendMessageChat94,
+  sendMessageChat4000,
 }));
 
-describe("recoverQueuedChat94Deliveries", () => {
+describe("recoverQueuedChat4000Deliveries", () => {
   const originalHome = process.env.OPENCLAW_HOME;
   let tempRoot = "";
 
   beforeEach(() => {
-    sendMessageChat94.mockReset();
-    tempRoot = mkdtempSync(path.join(os.tmpdir(), "chat94-deferred-"));
+    sendMessageChat4000.mockReset();
+    tempRoot = mkdtempSync(path.join(os.tmpdir(), "chat4000-deferred-"));
     process.env.OPENCLAW_HOME = tempRoot;
   });
 
@@ -41,30 +41,30 @@ describe("recoverQueuedChat94Deliveries", () => {
     return filePath;
   }
 
-  it("replays queued chat94 text replies and removes the queue entry", async () => {
+  it("replays queued chat4000 text replies and removes the queue entry", async () => {
     writeQueueEntry("queued.json", {
       id: "queued",
-      channel: "chat94",
-      to: "chat94:group-1",
+      channel: "chat4000",
+      to: "chat4000:group-1",
       accountId: "default",
       payloads: [
         {
           text: "Hello from queue",
         },
       ],
-      lastError: "Outbound not configured for channel: chat94",
+      lastError: "Outbound not configured for channel: chat4000",
     });
-    sendMessageChat94.mockResolvedValue({ messageId: "sent-1" });
+    sendMessageChat4000.mockResolvedValue({ messageId: "sent-1" });
 
-    const recovered = await recoverQueuedChat94Deliveries({
-      cfg: { channels: { chat94: {} } },
+    const recovered = await recoverQueuedChat4000Deliveries({
+      cfg: { channels: { chat4000: {} } },
       accountId: "default",
       groupId: "group-1",
     });
 
     expect(recovered).toBe(1);
-    expect(sendMessageChat94).toHaveBeenCalledWith("chat94:group-1", "Hello from queue", {
-      cfg: { channels: { chat94: {} } },
+    expect(sendMessageChat4000).toHaveBeenCalledWith("chat4000:group-1", "Hello from queue", {
+      cfg: { channels: { chat4000: {} } },
       accountId: "default",
     });
     expect(existsSync(path.join(tempRoot, ".openclaw", "delivery-queue", "queued.json"))).toBe(false);
@@ -79,35 +79,35 @@ describe("recoverQueuedChat94Deliveries", () => {
       payloads: [{ text: "nope" }],
     });
 
-    const recovered = await recoverQueuedChat94Deliveries({
-      cfg: { channels: { chat94: {} } },
+    const recovered = await recoverQueuedChat4000Deliveries({
+      cfg: { channels: { chat4000: {} } },
       accountId: "default",
       groupId: "group-1",
     });
 
     expect(recovered).toBe(0);
-    expect(sendMessageChat94).not.toHaveBeenCalled();
+    expect(sendMessageChat4000).not.toHaveBeenCalled();
     expect(readFileSync(filePath, "utf8")).toContain('"channel": "telegram"');
   });
 
   it("restores the queue entry when replay fails", async () => {
     const filePath = writeQueueEntry("failed.json", {
       id: "failed",
-      channel: "chat94",
-      to: "chat94:group-1",
+      channel: "chat4000",
+      to: "chat4000:group-1",
       accountId: "default",
       payloads: [{ text: "Hello again" }],
     });
-    sendMessageChat94.mockRejectedValue(new Error("relay unavailable"));
+    sendMessageChat4000.mockRejectedValue(new Error("relay unavailable"));
 
-    const recovered = await recoverQueuedChat94Deliveries({
-      cfg: { channels: { chat94: {} } },
+    const recovered = await recoverQueuedChat4000Deliveries({
+      cfg: { channels: { chat4000: {} } },
       accountId: "default",
       groupId: "group-1",
     });
 
     expect(recovered).toBe(0);
-    expect(sendMessageChat94).toHaveBeenCalledTimes(1);
+    expect(sendMessageChat4000).toHaveBeenCalledTimes(1);
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath, "utf8")).toContain('"id": "failed"');
   });
@@ -115,8 +115,8 @@ describe("recoverQueuedChat94Deliveries", () => {
   it("includes media URLs in the replayed fallback text", async () => {
     writeQueueEntry("media.json", {
       id: "media",
-      channel: "chat94",
-      to: "chat94:group-1",
+      channel: "chat4000",
+      to: "chat4000:group-1",
       accountId: "default",
       payloads: [
         {
@@ -126,19 +126,19 @@ describe("recoverQueuedChat94Deliveries", () => {
         },
       ],
     });
-    sendMessageChat94.mockResolvedValue({ messageId: "sent-2" });
+    sendMessageChat4000.mockResolvedValue({ messageId: "sent-2" });
 
-    await recoverQueuedChat94Deliveries({
-      cfg: { channels: { chat94: {} } },
+    await recoverQueuedChat4000Deliveries({
+      cfg: { channels: { chat4000: {} } },
       accountId: "default",
       groupId: "group-1",
     });
 
-    expect(sendMessageChat94).toHaveBeenCalledWith(
-      "chat94:group-1",
+    expect(sendMessageChat4000).toHaveBeenCalledWith(
+      "chat4000:group-1",
       "See attached\n\nAttachment: https://example.com/a.png\nAttachment: https://example.com/b.png",
       {
-        cfg: { channels: { chat94: {} } },
+        cfg: { channels: { chat4000: {} } },
         accountId: "default",
       },
     );

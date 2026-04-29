@@ -41,7 +41,7 @@ export function decrypt(
 }
 
 const PAIRING_ROOM_PREFIX = "pairing-v1:";
-const PAIR_WRAP_INFO = "chat94-pair-wrap-v1";
+const PAIR_WRAP_INFO = "chat4000-pair-wrap-v1";
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKMNPRTUVWXYZ2346789";
 
 export type X25519Keypair = {
@@ -94,7 +94,7 @@ export function generateGroupKey(): Buffer {
 /** Format group key as QR code URL (legacy helper retained for compatibility). */
 export function formatGroupQrUrl(groupKeyBytes: Buffer): string {
   const b64url = groupKeyBytes.toString("base64url");
-  return `chat94://pair/${b64url}`;
+  return `chat4000://pair/${b64url}`;
 }
 
 /** Parse a group key from base64url or hex string */

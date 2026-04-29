@@ -1,7 +1,7 @@
 services:
   openclaw:
     build: ./openclaw
-    container_name: chat94-openclaw
+    container_name: chat4000-openclaw
     ports:
       - "18789:18789"
     networks:
@@ -9,9 +9,9 @@ services:
 
   relay:
     build:
-      context: ../../chat94-server
+      context: ../../chat4000-server
       dockerfile: ${PWD}/relay/Dockerfile
-    container_name: chat94-relay
+    container_name: chat4000-relay
     ports:
       - "7890:7890"
     networks:
