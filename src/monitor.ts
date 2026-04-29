@@ -144,7 +144,7 @@ export async function monitorChat4000Provider(opts: MonitorOptions): Promise<voi
           type: "msg",
           msg_id: msg.msg_id,
         });
-        const plaintext = decrypt(msg.nonce, msg.ciphertext, account.groupKeyBytes);
+        const plaintext = await decrypt(msg.nonce, msg.ciphertext, account.groupKeyBytes);
         if (!plaintext) {
           runtimeLogger.info("runtime.msg_decrypt_error", { msg_id: msg.msg_id });
           opts.log?.warn?.(`[${account.accountId}] Failed to decrypt message ${msg.msg_id}`);

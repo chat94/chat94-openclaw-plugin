@@ -7,13 +7,27 @@ import {
   KeyObject,
   randomBytes,
 } from "node:crypto";
-import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import type { RelayWrappedKeyPayload } from "./types.js";
 
-export function encrypt(
+/**
+ * `@noble/ciphers@2.x` is published as a pure ESM package. OpenClaw's plugin
+ * loader (jiti-based) transforms static `import` statements into `require()`
+ * calls, which fail with `MODULE_NOT_FOUND` against pure-ESM packages. We
+ * defer the load to a real native dynamic `import()` and cache the resolved
+ * module so per-call cost is just a property read after the first await.
+ */
+type XChaChaModule = typeof import("@noble/ciphers/chacha.js");
+let xchachaModulePromise: Promise<XChaChaModule> | undefined;
+async function loadXChaCha20Poly1305(): Promise<XChaChaModule["xchacha20poly1305"]> {
+  xchachaModulePromise ??= import("@noble/ciphers/chacha.js");
+  return (await xchachaModulePromise).xchacha20poly1305;
+}
+
+export async function encrypt(
   plaintext: Buffer,
   key: Buffer,
-): { nonce: string; ciphertext: string } {
+): Promise<{ nonce: string; ciphertext: string }> {
+  const xchacha20poly1305 = await loadXChaCha20Poly1305();
   const nonce = randomBytes(24);
   const cipher = xchacha20poly1305(key, nonce);
   const sealed = cipher.encrypt(plaintext);
@@ -24,12 +38,13 @@ export function encrypt(
   };
 }
 
-export function decrypt(
+export async function decrypt(
   nonceB64: string,
   ciphertextB64: string,
   key: Buffer,
-): Buffer | null {
+): Promise<Buffer | null> {
   try {
+    const xchacha20poly1305 = await loadXChaCha20Poly1305();
     const nonce = Buffer.from(nonceB64, "base64");
     const ciphertext = Buffer.from(ciphertextB64, "base64");
     const cipher = xchacha20poly1305(key, nonce);
@@ -161,10 +176,11 @@ export function computePairingProof(
   return proof.toString("base64");
 }
 
-export function wrapGroupKeyToJoiner(
+export async function wrapGroupKeyToJoiner(
   recipientPublicKeyB64: string,
   groupKey: Buffer,
-): RelayWrappedKeyPayload {
+): Promise<RelayWrappedKeyPayload> {
+  const xchacha20poly1305 = await loadXChaCha20Poly1305();
   const recipientPublicKey = x25519PublicKeyFromRaw(Buffer.from(recipientPublicKeyB64, "base64"));
   const { privateKey, publicKey } = generateKeyPairSync("x25519");
   const sharedSecret = diffieHellman({
@@ -186,11 +202,12 @@ export function wrapGroupKeyToJoiner(
   };
 }
 
-export function unwrapGroupKeyFromInitiator(
+export async function unwrapGroupKeyFromInitiator(
   wrappedKey: RelayWrappedKeyPayload,
   recipientPrivateKey: KeyObject,
-): Buffer | null {
+): Promise<Buffer | null> {
   try {
+    const xchacha20poly1305 = await loadXChaCha20Poly1305();
     const senderPublicKey = x25519PublicKeyFromRaw(Buffer.from(wrappedKey.ephemeral_pub, "base64"));
     const sharedSecret = diffieHellman({
       privateKey: recipientPrivateKey,

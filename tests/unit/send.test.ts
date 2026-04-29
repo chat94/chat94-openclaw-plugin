@@ -22,9 +22,9 @@ describe("send", () => {
     runtimeLogLevel: "info",
   };
 
-  function parseInnerMessage(envelope: RelayEnvelope): InnerMessage {
+  async function parseInnerMessage(envelope: RelayEnvelope): Promise<InnerMessage> {
     const payload = envelope.payload as { nonce: string; ciphertext: string };
-    const plaintext = decrypt(payload.nonce, payload.ciphertext, groupKeyBytes);
+    const plaintext = await decrypt(payload.nonce, payload.ciphertext, groupKeyBytes);
     expect(plaintext).not.toBeNull();
     return JSON.parse(plaintext!.toString("utf-8")) as InnerMessage;
   }
@@ -52,7 +52,7 @@ describe("send", () => {
     expect(sentMessages[0]!.type).toBe("msg");
     expect(sentMessages[0]!.payload.notify_if_offline).toBe(true);
 
-    const inner = parseInnerMessage(sentMessages[0]!);
+    const inner = await parseInnerMessage(sentMessages[0]!);
     expect(inner.t).toBe("text");
     expect(inner.id).toBe(result.messageId);
     expect(inner.body).toEqual({ text: "hello agent" });
@@ -74,10 +74,10 @@ describe("send", () => {
     expect(ct).not.toContain("secret text");
   });
 
-  it("sends stream delta", () => {
-    sendStreamDelta(groupId, "stream-1", "delta");
+  it("sends stream delta", async () => {
+    await sendStreamDelta(groupId, "stream-1", "delta");
     expect(sentMessages[0]!.payload.notify_if_offline).toBeUndefined();
-    const inner = parseInnerMessage(sentMessages[0]!);
+    const inner = await parseInnerMessage(sentMessages[0]!);
     expect(inner).toMatchObject({
       t: "text_delta",
       id: "stream-1",
@@ -85,10 +85,10 @@ describe("send", () => {
     });
   });
 
-  it("sends stream end", () => {
-    sendStreamEnd(groupId, "stream-1", "full text");
+  it("sends stream end", async () => {
+    await sendStreamEnd(groupId, "stream-1", "full text");
     expect(sentMessages[0]!.payload.notify_if_offline).toBeUndefined();
-    const inner = parseInnerMessage(sentMessages[0]!);
+    const inner = await parseInnerMessage(sentMessages[0]!);
     expect(inner).toMatchObject({
       t: "text_end",
       id: "stream-1",
@@ -96,10 +96,10 @@ describe("send", () => {
     });
   });
 
-  it("sends status", () => {
-    sendStatus(groupId, "thinking");
+  it("sends status", async () => {
+    await sendStatus(groupId, "thinking");
     expect(sentMessages[0]!.payload.notify_if_offline).toBeUndefined();
-    const inner = parseInnerMessage(sentMessages[0]!);
+    const inner = await parseInnerMessage(sentMessages[0]!);
     expect(inner.t).toBe("status");
     expect(inner.body).toEqual({ status: "thinking" });
   });

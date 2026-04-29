@@ -112,7 +112,7 @@ export async function joinPairingSession(opts: PairJoinOptions): Promise<PairJoi
       }, logger);
     });
 
-    ws.on("message", (raw) => {
+    ws.on("message", async (raw) => {
       const envelope = parseEnvelope(raw);
       if (!envelope) return;
       logger.logRecv(envelope);
@@ -177,7 +177,7 @@ export async function joinPairingSession(opts: PairJoinOptions): Promise<PairJoi
           return;
         }
         logger.info("pair.proof_a_verify", { verified: true });
-        const groupKeyBytes = unwrapGroupKeyFromInitiator(
+        const groupKeyBytes = await unwrapGroupKeyFromInitiator(
           grant.wrapped_key as RelayWrappedKeyPayload,
           keypair.privateKey,
         );
@@ -318,7 +318,7 @@ async function hostPairingSessionOnce(opts: PairHostOptions): Promise<PairHostRe
       }, logger);
     });
 
-    ws.on("message", (raw) => {
+    ws.on("message", async (raw) => {
       const envelope = parseEnvelope(raw);
       if (!envelope) return;
       logger.logRecv(envelope);
@@ -402,7 +402,7 @@ async function hostPairingSessionOnce(opts: PairHostOptions): Promise<PairHostRe
           finish(() => reject(new Error("Joiner proof mismatch")));
           return;
         }
-        const wrappedKey = wrapGroupKeyToJoiner(joinerPublicKeyB64, opts.groupKeyBytes);
+        const wrappedKey = await wrapGroupKeyToJoiner(joinerPublicKeyB64, opts.groupKeyBytes);
         sendEnvelope(ws, {
           version: 1,
           type: "pair_data",

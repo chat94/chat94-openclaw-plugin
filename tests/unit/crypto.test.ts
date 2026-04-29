@@ -22,19 +22,19 @@ import {
 describe("crypto", () => {
   const key = Buffer.alloc(32, 0x11);
 
-  it("encrypt and decrypt roundtrip", () => {
+  it("encrypt and decrypt roundtrip", async () => {
     const plaintext = Buffer.from("hello from Chat4000");
-    const { nonce, ciphertext } = encrypt(plaintext, key);
-    const decrypted = decrypt(nonce, ciphertext, key);
+    const { nonce, ciphertext } = await encrypt(plaintext, key);
+    const decrypted = await decrypt(nonce, ciphertext, key);
     expect(decrypted).not.toBeNull();
     expect(decrypted!.toString("utf-8")).toBe("hello from Chat4000");
   });
 
-  it("wrong key fails to decrypt", () => {
+  it("wrong key fails to decrypt", async () => {
     const wrongKey = Buffer.alloc(32, 0x22);
     const plaintext = Buffer.from("secret");
-    const { nonce, ciphertext } = encrypt(plaintext, key);
-    const result = decrypt(nonce, ciphertext, wrongKey);
+    const { nonce, ciphertext } = await encrypt(plaintext, key);
+    const result = await decrypt(nonce, ciphertext, wrongKey);
     expect(result).toBeNull();
   });
 
@@ -68,33 +68,33 @@ describe("crypto", () => {
     expect(() => parseGroupKey("short")).toThrow("Invalid group key");
   });
 
-  it("encrypt empty payload", () => {
+  it("encrypt empty payload", async () => {
     const plaintext = Buffer.alloc(0);
-    const { nonce, ciphertext } = encrypt(plaintext, key);
-    const decrypted = decrypt(nonce, ciphertext, key);
+    const { nonce, ciphertext } = await encrypt(plaintext, key);
+    const decrypted = await decrypt(nonce, ciphertext, key);
     expect(decrypted).not.toBeNull();
     expect(decrypted!.length).toBe(0);
   });
 
-  it("encrypt large payload (64KB)", () => {
+  it("encrypt large payload (64KB)", async () => {
     const plaintext = Buffer.alloc(65_536, 0xab);
-    const { nonce, ciphertext } = encrypt(plaintext, key);
-    const decrypted = decrypt(nonce, ciphertext, key);
+    const { nonce, ciphertext } = await encrypt(plaintext, key);
+    const decrypted = await decrypt(nonce, ciphertext, key);
     expect(decrypted).not.toBeNull();
     expect(decrypted!.length).toBe(65_536);
     expect(decrypted![0]).toBe(0xab);
   });
 
-  it("corrupted ciphertext fails", () => {
-    const { nonce, ciphertext } = encrypt(Buffer.from("data"), key);
+  it("corrupted ciphertext fails", async () => {
+    const { nonce, ciphertext } = await encrypt(Buffer.from("data"), key);
     const corrupted = ciphertext.slice(0, -2) + "XX";
-    expect(decrypt(nonce, corrupted, key)).toBeNull();
+    expect(await decrypt(nonce, corrupted, key)).toBeNull();
   });
 
-  it("wrong nonce fails", () => {
-    const { ciphertext } = encrypt(Buffer.from("data"), key);
+  it("wrong nonce fails", async () => {
+    const { ciphertext } = await encrypt(Buffer.from("data"), key);
     const wrongNonce = Buffer.alloc(24).toString("base64");
-    expect(decrypt(wrongNonce, ciphertext, key)).toBeNull();
+    expect(await decrypt(wrongNonce, ciphertext, key)).toBeNull();
   });
 
   it("normalizes pairing codes and derives room ids", () => {
@@ -119,10 +119,10 @@ describe("crypto", () => {
     expect(proof).toBe("iqH42fMsdUtAwURmEZj1m2GlqS3itz12RWHDLARn7aE=");
   });
 
-  it("wraps and unwraps a group key via x25519+xchacha20poly1305", () => {
+  it("wraps and unwraps a group key via x25519+xchacha20poly1305", async () => {
     const keypair = generatePairingJoinerKeypair();
-    const wrapped = wrapGroupKeyToJoiner(keypair.publicKeyBase64, key);
-    const unwrapped = unwrapGroupKeyFromInitiator(wrapped, keypair.privateKey);
+    const wrapped = await wrapGroupKeyToJoiner(keypair.publicKeyBase64, key);
+    const unwrapped = await unwrapGroupKeyFromInitiator(wrapped, keypair.privateKey);
     expect(unwrapped).not.toBeNull();
     expect(unwrapped!.equals(key)).toBe(true);
   });

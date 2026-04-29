@@ -63,13 +63,13 @@ export function unregisterSender(groupId: string): void {
   activeSenders.delete(groupId);
 }
 
-function sendInnerMessage(
+async function sendInnerMessage(
   groupId: string,
   t: InnerMessageType,
   body: Record<string, unknown>,
   messageId: string = randomUUID(),
   opts?: { notifyIfOffline?: boolean },
-): string {
+): Promise<string> {
   const active = activeSenders.get(groupId);
   if (!active) {
     throw new Error(`No active relay connection for group "${groupId}"`);
@@ -84,7 +84,7 @@ function sendInnerMessage(
   };
 
   const plaintext = Buffer.from(JSON.stringify(innerMessage), "utf-8");
-  const { nonce, ciphertext } = encrypt(plaintext, active.groupKeyBytes);
+  const { nonce, ciphertext } = await encrypt(plaintext, active.groupKeyBytes);
 
   active.send({
     version: 1,
@@ -123,31 +123,38 @@ export async function sendMessageChat4000(
     throw new Error(`chat4000 not configured for account "${account.accountId}"`);
   }
 
-  const messageId = sendInnerMessage(account.groupId, "text", { text }, undefined, {
+  const messageId = await sendInnerMessage(account.groupId, "text", { text }, undefined, {
     notifyIfOffline: true,
   });
   return { messageId };
 }
 
-export function sendStreamDelta(groupId: string, streamId: string, delta: string): void {
-  sendInnerMessage(groupId, "text_delta", { delta }, streamId);
+export async function sendStreamDelta(
+  groupId: string,
+  streamId: string,
+  delta: string,
+): Promise<void> {
+  await sendInnerMessage(groupId, "text_delta", { delta }, streamId);
 }
 
-export function sendStreamEnd(
+export async function sendStreamEnd(
   groupId: string,
   streamId: string,
   fullText: string,
   opts?: { notifyIfOffline?: boolean; reset?: boolean },
-): void {
+): Promise<void> {
   const body: Record<string, unknown> = { text: fullText };
   if (opts?.reset) {
     body.reset = true;
   }
-  sendInnerMessage(groupId, "text_end", body, streamId, opts);
+  await sendInnerMessage(groupId, "text_end", body, streamId, opts);
 }
 
-export function sendStatus(groupId: string, status: "thinking" | "typing" | "idle"): void {
-  const messageId = sendInnerMessage(groupId, "status", { status });
+export async function sendStatus(
+  groupId: string,
+  status: "thinking" | "typing" | "idle",
+): Promise<void> {
+  const messageId = await sendInnerMessage(groupId, "status", { status });
   activeSenders.get(groupId)?.runtimeLogger?.info("runtime.send", {
     type: "status",
     msg_id: messageId,
