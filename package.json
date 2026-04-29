@@ -1,6 +1,6 @@
 {
   "name": "@chat94/openclaw-plugin",
-  "version": "1.0.0-test.6",
+  "version": "1.0.0-test.7",
   "description": "OpenClaw channel plugin for chat94 — routes messages through E2E encrypted relay",
   "license": "GPL-3.0-or-later",
   "type": "module",

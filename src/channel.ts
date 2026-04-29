@@ -22,6 +22,20 @@ import { randomUUID } from "node:crypto";
 const STREAM_FLUSH_MIN_CHARS = 200;
 const STREAM_FLUSH_DELAY_MS = 100;
 const DEFERRED_DELIVERY_RECOVERY_INTERVAL_MS = 5_000;
+const CHAT94_TARGET_PREFIX = "chat94:";
+
+function stripChat94Prefix(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.toLowerCase().startsWith(CHAT94_TARGET_PREFIX)
+    ? trimmed.slice(CHAT94_TARGET_PREFIX.length) || undefined
+    : trimmed;
+}
 
 // Lazy-load runtime to avoid pulling in WebSocket/crypto on import
 let channelRuntimePromise: Promise<typeof import("./channel-runtime.js")> | undefined;
@@ -111,6 +125,44 @@ export const chat94Plugin = {
 
   conversationBindings: {
     supportsCurrentConversationBinding: true,
+    defaultTopLevelPlacement: "current" as const,
+  },
+
+  messaging: {
+    resolveInboundConversation: ({
+      to,
+      groupId,
+      conversationId,
+      threadId,
+    }: {
+      to?: string | null;
+      groupId?: string | null;
+      conversationId?: string | null;
+      threadId?: string | null;
+    }) => {
+      const id = stripChat94Prefix(threadId)
+        ?? stripChat94Prefix(to)
+        ?? stripChat94Prefix(conversationId)
+        ?? stripChat94Prefix(groupId);
+      return id ? { conversationId: id } : null;
+    },
+  },
+
+  bindings: {
+    resolveCommandConversation: ({
+      originatingTo,
+      commandTo,
+      fallbackTo,
+    }: {
+      originatingTo?: string | null;
+      commandTo?: string | null;
+      fallbackTo?: string | null;
+    }) => {
+      const id = stripChat94Prefix(originatingTo)
+        ?? stripChat94Prefix(commandTo)
+        ?? stripChat94Prefix(fallbackTo);
+      return id ? { conversationId: id } : null;
+    },
   },
 
   // ─── Config ─────────────────────────────────────────────────────────────
