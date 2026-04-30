@@ -1,10 +1,10 @@
 {
-  "id": "chat94",
-  "channels": ["chat94"],
+  "id": "chat4000",
+  "channels": ["chat4000"],
   "channelConfigs": {
-    "chat94": {
-      "label": "chat94",
-      "description": "Encrypted relay connection for paired chat94 devices.",
+    "chat4000": {
+      "label": "chat4000",
+      "description": "Encrypted relay connection for paired chat4000 devices.",
       "schema": {
         "type": "object",
         "additionalProperties": false,
@@ -56,8 +56,8 @@
     }
   },
   "channelEnvVars": {
-    "chat94": [
-      "CHAT94_GROUP_KEY"
+    "chat4000": [
+      "CHAT4000_GROUP_KEY"
     ]
   },
   "configSchema": {

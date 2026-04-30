@@ -11,7 +11,7 @@
 - `pairKey` / `pairId` internal model migrated to `groupKey` / `groupId`
 - relay `hello` now sends `group_id`
 - account resolution now prefers plugin-managed key files, while still accepting env/config legacy overrides
-- only `CHAT94_GROUP_KEY` is supported for env-based key injection
+- only `CHAT4000_GROUP_KEY` is supported for env-based key injection
 
 ### Pairing Support
 
@@ -49,8 +49,8 @@ These are still open after the operator workflow pass:
 
 - The code is aligned to the current protocol file, including the latest pairing room namespace change.
 - Operator-facing commands now target:
-  - `openclaw chat94 setup`
-  - `openclaw chat94 pair`
-  - `openclaw chat94 setup --no-pair`
-  - `openclaw chat94 status`
+  - `openclaw chat4000 setup`
+  - `openclaw chat4000 pair`
+  - `openclaw chat4000 setup --no-pair`
+  - `openclaw chat4000 status`
 - Contract tests still depend on an external relay binary and were not rerun as part of this workspace-only pass.

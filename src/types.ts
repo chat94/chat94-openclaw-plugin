@@ -1,6 +1,6 @@
 // ─── Plugin config ──────────────────────────────────────────────────────────
 
-export type Chat94AccountConfig = {
+export type Chat4000AccountConfig = {
   enabled?: boolean;
   pairingLogLevel?: "info" | "debug";
   runtimeLogLevel?: "info" | "debug";
@@ -14,14 +14,14 @@ export type Chat94AccountConfig = {
   blockStreaming?: boolean;
 };
 
-export type Chat94Config = Chat94AccountConfig & {
-  accounts?: Record<string, Chat94AccountConfig>;
+export type Chat4000Config = Chat4000AccountConfig & {
+  accounts?: Record<string, Chat4000AccountConfig>;
   defaultAccount?: string;
 };
 
 // ─── Resolved account ───────────────────────────────────────────────────────
 
-export type ResolvedChat94Account = {
+export type ResolvedChat4000Account = {
   accountId: string;
   enabled: boolean;
   configured: boolean;
@@ -32,7 +32,7 @@ export type ResolvedChat94Account = {
   groupKeyBytes: Buffer;
   keyFilePath: string;
   keySource: "state-file" | "config" | "env" | "missing";
-  config: Chat94AccountConfig;
+  config: Chat4000AccountConfig;
 };
 
 // ─── Relay protocol messages ────────────────────────────────────────────────
@@ -146,7 +146,7 @@ export type InnerStatusBody = { status: "thinking" | "typing" | "idle" };
 
 // ─── Inbound (from iPhone) ──────────────────────────────────────────────────
 
-export type Chat94InboundTextMessage = {
+export type Chat4000InboundTextMessage = {
   messageId: string;
   innerType: "text";
   text: string;
@@ -155,7 +155,7 @@ export type Chat94InboundTextMessage = {
   from?: InnerMessageFrom;
 };
 
-export type Chat94InboundImageMessage = {
+export type Chat4000InboundImageMessage = {
   messageId: string;
   innerType: "image";
   dataBase64: string;
@@ -165,7 +165,7 @@ export type Chat94InboundImageMessage = {
   from?: InnerMessageFrom;
 };
 
-export type Chat94InboundAudioMessage = {
+export type Chat4000InboundAudioMessage = {
   messageId: string;
   innerType: "audio";
   dataBase64: string;
@@ -177,14 +177,14 @@ export type Chat94InboundAudioMessage = {
   from?: InnerMessageFrom;
 };
 
-export type Chat94InboundMessage =
-  | Chat94InboundTextMessage
-  | Chat94InboundImageMessage
-  | Chat94InboundAudioMessage;
+export type Chat4000InboundMessage =
+  | Chat4000InboundTextMessage
+  | Chat4000InboundImageMessage
+  | Chat4000InboundAudioMessage;
 
 // ─── Probe result ───────────────────────────────────────────────────────────
 
-export type Chat94Probe = {
+export type Chat4000Probe = {
   ok: boolean;
   error?: string;
   latencyMs?: number;

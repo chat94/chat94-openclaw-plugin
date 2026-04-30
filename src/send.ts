@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { resolveChat94Account } from "./accounts.js";
+import { resolveChat4000Account } from "./accounts.js";
 import { encrypt } from "./crypto.js";
-import { resolveChat94InstanceIdentity } from "./key-store.js";
+import { resolveChat4000InstanceIdentity } from "./key-store.js";
 import { readPackageVersion } from "./package-info.js";
 import { RuntimeLogger } from "./runtime-logger.js";
 import type {
@@ -9,16 +9,16 @@ import type {
   InnerMessageFrom,
   InnerMessageType,
   RelayEnvelope,
-  ResolvedChat94Account,
+  ResolvedChat4000Account,
 } from "./types.js";
 
-export type SendChat94Options = {
+export type SendChat4000Options = {
   cfg: { channels?: Record<string, unknown> };
   accountId?: string;
   replyToId?: string;
 };
 
-export type SendChat94Result = {
+export type SendChat4000Result = {
   messageId: string;
 };
 
@@ -33,20 +33,20 @@ let cachedPluginFrom: InnerMessageFrom | undefined;
 
 function resolvePluginFrom(): InnerMessageFrom {
   cachedPluginFrom ??= (() => {
-    const instance = resolveChat94InstanceIdentity();
+    const instance = resolveChat4000InstanceIdentity();
     return {
       role: "plugin",
       device_id: instance.deviceId,
       device_name: instance.deviceName,
       app_version: readPackageVersion(),
-      bundle_id: "@chat94/openclaw-plugin",
+      bundle_id: "@chat4000/openclaw-plugin",
     };
   })();
   return cachedPluginFrom;
 }
 
 export function registerSender(
-  account: Pick<ResolvedChat94Account, "groupId" | "groupKeyBytes" | "accountId" | "runtimeLogLevel">,
+  account: Pick<ResolvedChat4000Account, "groupId" | "groupKeyBytes" | "accountId" | "runtimeLogLevel">,
   send: (envelope: RelayEnvelope) => void,
 ): void {
   activeSenders.set(account.groupId, {
@@ -107,18 +107,18 @@ function sendInnerMessage(
   return messageId;
 }
 
-export async function sendMessageChat94(
+export async function sendMessageChat4000(
   to: string,
   text: string,
-  opts: SendChat94Options,
-): Promise<SendChat94Result> {
-  const account = resolveChat94Account({
+  opts: SendChat4000Options,
+): Promise<SendChat4000Result> {
+  const account = resolveChat4000Account({
     cfg: opts.cfg,
     accountId: opts.accountId,
   });
 
   if (!account.configured) {
-    throw new Error(`chat94 not configured for account "${account.accountId}"`);
+    throw new Error(`chat4000 not configured for account "${account.accountId}"`);
   }
 
   const messageId = sendInnerMessage(account.groupId, "text", { text }, undefined, {

@@ -2,20 +2,20 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   registerSender,
   unregisterSender,
-  sendMessageChat94,
+  sendMessageChat4000,
   sendStatus,
   sendStreamDelta,
   sendStreamEnd,
 } from "../../src/send.js";
 import { decrypt, deriveGroupId } from "../../src/crypto.js";
-import type { InnerMessage, RelayEnvelope, ResolvedChat94Account } from "../../src/types.js";
+import type { InnerMessage, RelayEnvelope, ResolvedChat4000Account } from "../../src/types.js";
 
 describe("send", () => {
   const sentMessages: RelayEnvelope[] = [];
   const groupKeyBytes = Buffer.alloc(32, 0x71);
   const groupKey = groupKeyBytes.toString("base64url");
   const groupId = deriveGroupId(groupKeyBytes);
-  const account: Pick<ResolvedChat94Account, "groupId" | "groupKeyBytes" | "accountId" | "runtimeLogLevel"> = {
+  const account: Pick<ResolvedChat4000Account, "groupId" | "groupKeyBytes" | "accountId" | "runtimeLogLevel"> = {
     accountId: "default",
     groupId,
     groupKeyBytes,
@@ -39,10 +39,10 @@ describe("send", () => {
   });
 
   it("sends encrypted text message with inner format", async () => {
-    const result = await sendMessageChat94(`chat94:${groupId}`, "hello agent", {
+    const result = await sendMessageChat4000(`chat4000:${groupId}`, "hello agent", {
       cfg: {
         channels: {
-          chat94: { groupKey },
+          chat4000: { groupKey },
         },
       },
     });
@@ -58,15 +58,15 @@ describe("send", () => {
     expect(inner.body).toEqual({ text: "hello agent" });
     expect(inner.from).toMatchObject({
       role: "plugin",
-      app_version: "1.0.0",
-      bundle_id: "@chat94/openclaw-plugin",
+      app_version: "1.0.0-test.10",
+      bundle_id: "@chat4000/openclaw-plugin",
     });
     expect(typeof inner.ts).toBe("number");
   });
 
   it("encrypts before sending", async () => {
-    await sendMessageChat94("to", "secret text", {
-      cfg: { channels: { chat94: { groupKey } } },
+    await sendMessageChat4000("to", "secret text", {
+      cfg: { channels: { chat4000: { groupKey } } },
     });
 
     const ct = sentMessages[0]!.payload.ciphertext as string;
@@ -106,16 +106,16 @@ describe("send", () => {
   it("send without active connection throws", async () => {
     unregisterSender(groupId);
     await expect(
-      sendMessageChat94("to", "text", {
-        cfg: { channels: { chat94: { groupKey } } },
+      sendMessageChat4000("to", "text", {
+        cfg: { channels: { chat4000: { groupKey } } },
       }),
     ).rejects.toThrow("No active relay connection");
   });
 
   it("send with unconfigured account throws", async () => {
     await expect(
-      sendMessageChat94("to", "text", {
-        cfg: { channels: { chat94: {} } },
+      sendMessageChat4000("to", "text", {
+        cfg: { channels: { chat4000: {} } },
       }),
     ).rejects.toThrow("not configured");
   });

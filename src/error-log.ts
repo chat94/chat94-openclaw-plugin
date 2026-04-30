@@ -1,24 +1,24 @@
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawHome } from "./key-store.js";
-import { captureChat94Exception } from "./telemetry.js";
+import { captureChat4000Exception } from "./telemetry.js";
 
-function resolveChat94LogDir(): string {
-  return path.join(resolveOpenClawHome(), "plugins", "chat94", "logs");
+function resolveChat4000LogDir(): string {
+  return path.join(resolveOpenClawHome(), "plugins", "chat4000", "logs");
 }
 
-export function resolveChat94ErrorLogPath(): string {
-  return path.join(resolveChat94LogDir(), "errors.log");
+export function resolveChat4000ErrorLogPath(): string {
+  return path.join(resolveChat4000LogDir(), "errors.log");
 }
 
-export function dumpChat94Trace(
+export function dumpChat4000Trace(
   scope: string,
   error: unknown,
   context?: Record<string, unknown>,
 ): string {
-  captureChat94Exception(error, scope);
+  captureChat4000Exception(error, scope);
 
-  const logPath = resolveChat94ErrorLogPath();
+  const logPath = resolveChat4000ErrorLogPath();
   const detail = error instanceof Error
     ? error
     : new Error(typeof error === "string" ? error : JSON.stringify(error));

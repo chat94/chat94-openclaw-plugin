@@ -10,7 +10,7 @@ import {
   normalizePairingCode,
   unwrapGroupKeyFromInitiator,
 } from "./crypto.js";
-import { dumpChat94Trace } from "./error-log.js";
+import { dumpChat4000Trace } from "./error-log.js";
 import { PairingLogger, type PairingLogLevel } from "./pairing-logger.js";
 import type {
   RelayEnvelope,
@@ -221,7 +221,7 @@ export async function joinPairingSession(opts: PairJoinOptions): Promise<PairJoi
 
     ws.on("error", (err) => {
       logger.logWsError(err);
-      dumpChat94Trace("pair-join-error", err, {
+      dumpChat4000Trace("pair-join-error", err, {
         roomId,
       });
       finish(() => reject(err));
@@ -234,7 +234,7 @@ export async function joinPairingSession(opts: PairJoinOptions): Promise<PairJoi
         const error = new Error(detail);
         logger.logWsClose(codeValue, reason.trim());
         logger.logFinish("error", detail);
-        dumpChat94Trace("pair-join-close", error, {
+        dumpChat4000Trace("pair-join-close", error, {
           roomId,
         });
         finish(() => reject(error));
@@ -266,7 +266,7 @@ export async function hostPairingSession(opts: PairHostOptions): Promise<PairHos
         throw error;
       }
       const message = error instanceof Error ? error.message : String(error);
-      dumpChat94Trace("pair-host-reconnect", error, {
+      dumpChat4000Trace("pair-host-reconnect", error, {
         code,
         attempt,
       });
@@ -430,7 +430,7 @@ async function hostPairingSessionOnce(opts: PairHostOptions): Promise<PairHostRe
 
     ws.on("error", (err) => {
       logger.logWsError(err);
-      dumpChat94Trace("pair-host-error", err, {
+      dumpChat4000Trace("pair-host-error", err, {
         roomId,
       });
       finish(() => reject(err));
@@ -449,7 +449,7 @@ async function hostPairingSessionOnce(opts: PairHostOptions): Promise<PairHostRe
         const detail = reason.trim() ? `Pairing socket closed (${codeValue}: ${reason.trim()})` : `Pairing socket closed (${codeValue})`;
         logger.logWsClose(codeValue, reason.trim());
         logger.logFinish("error", detail);
-        dumpChat94Trace("pair-host-close", new Error(detail), {
+        dumpChat4000Trace("pair-host-close", new Error(detail), {
           roomId,
           grantSent,
         });

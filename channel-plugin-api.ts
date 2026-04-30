@@ -1,1 +1,1 @@
-export { chat94Plugin } from "./src/channel.js";
+export { chat4000Plugin } from "./src/channel.js";

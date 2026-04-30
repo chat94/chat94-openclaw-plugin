@@ -1,9 +1,9 @@
 // Lazy barrel — only imported when gateway starts.
 // Prevents bundled entry from loading heavy runtime code.
-export { monitorChat94Provider } from "./monitor.js";
+export { monitorChat4000Provider } from "./monitor.js";
 export { hostPairingSession, joinPairingSession } from "./pairing.js";
 export {
-  sendMessageChat94,
+  sendMessageChat4000,
   sendStreamDelta,
   sendStreamEnd,
   sendStatus,

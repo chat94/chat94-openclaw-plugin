@@ -1,22 +1,22 @@
 import { deriveGroupId, parseGroupKey } from "./crypto.js";
-import { loadStoredGroupKey, resolveChat94KeyFilePath } from "./key-store.js";
-import type { ResolvedChat94Account, Chat94Config } from "./types.js";
+import { loadStoredGroupKey, resolveChat4000KeyFilePath } from "./key-store.js";
+import type { ResolvedChat4000Account, Chat4000Config } from "./types.js";
 
-const DEFAULT_RELAY_URL = "wss://relay.chat94.com/ws";
+const DEFAULT_RELAY_URL = "wss://relay.chat4000.com/ws";
 
 type ChannelConfigInput = { channels?: Record<string, unknown> } | undefined;
 
-function getChannelConfig(cfg: ChannelConfigInput): Chat94Config {
-  return ((cfg ?? {}).channels?.["chat94"] ?? {}) as Chat94Config;
+function getChannelConfig(cfg: ChannelConfigInput): Chat4000Config {
+  return ((cfg ?? {}).channels?.["chat4000"] ?? {}) as Chat4000Config;
 }
 
-export function listChat94AccountIds(cfg: ChannelConfigInput): string[] {
+export function listChat4000AccountIds(cfg: ChannelConfigInput): string[] {
   const channelConfig = getChannelConfig(cfg);
   const accountIds = Object.keys(channelConfig.accounts ?? {});
   return accountIds.length > 0 ? accountIds : [channelConfig.defaultAccount ?? "default"];
 }
 
-export function getDefaultChat94AccountId(cfg: ChannelConfigInput): string {
+export function getDefaultChat4000AccountId(cfg: ChannelConfigInput): string {
   const channelConfig = getChannelConfig(cfg);
   const accountIds = Object.keys(channelConfig.accounts ?? {});
   if (channelConfig.defaultAccount && accountIds.includes(channelConfig.defaultAccount)) {
@@ -27,15 +27,15 @@ export function getDefaultChat94AccountId(cfg: ChannelConfigInput): string {
 }
 
 /**
- * Resolve a chat94 account from OpenClaw config.
+ * Resolve a chat4000 account from OpenClaw config.
  * Merges top-level + per-account config with the fixed production relay.
  */
-export function resolveChat94Account(params: {
+export function resolveChat4000Account(params: {
   cfg?: { channels?: Record<string, unknown> };
   accountId?: string | null;
-}): ResolvedChat94Account {
+}): ResolvedChat4000Account {
   const channelConfig = getChannelConfig(params.cfg);
-  const accountId = params.accountId ?? getDefaultChat94AccountId(params.cfg);
+  const accountId = params.accountId ?? getDefaultChat4000AccountId(params.cfg);
 
   const accountOverrides = channelConfig.accounts?.[accountId] ?? {};
   const merged = { ...channelConfig, ...accountOverrides };
@@ -44,10 +44,10 @@ export function resolveChat94Account(params: {
 
   let groupKeyBytes: Buffer = Buffer.alloc(0);
   let groupId = "";
-  let keySource: ResolvedChat94Account["keySource"] = "missing";
-  const keyFilePath = resolveChat94KeyFilePath(accountId);
+  let keySource: ResolvedChat4000Account["keySource"] = "missing";
+  const keyFilePath = resolveChat4000KeyFilePath(accountId);
 
-  const envGroupKeyRaw = process.env.CHAT94_GROUP_KEY?.trim() || "";
+  const envGroupKeyRaw = process.env.CHAT4000_GROUP_KEY?.trim() || "";
   const configGroupKeyRaw = merged.groupKey?.trim() || "";
 
   if (envGroupKeyRaw.length > 0) {
@@ -99,6 +99,6 @@ export function resolveChat94Account(params: {
  * (used by setup wizard to detect pre-configuration)
  */
 export function hasConfiguredState(env?: Record<string, string>): boolean {
-  const groupKey = env?.CHAT94_GROUP_KEY?.trim();
+  const groupKey = env?.CHAT4000_GROUP_KEY?.trim();
   return Boolean(groupKey && groupKey.length > 0);
 }

@@ -1,8 +1,8 @@
-# chat94 Plugin — Product Specification
+# chat4000 Plugin — Product Specification
 
 ## Purpose
 
-This document defines what the chat94 plugin is supposed to be and do.
+This document defines what the chat4000 plugin is supposed to be and do.
 
 This is the product contract. It describes scope, features, behaviors, and operator-facing workflows in a stable way.
 
@@ -10,17 +10,17 @@ Implementation progress does not belong here as the primary source of truth. Pro
 
 ## Product Overview
 
-The chat94 plugin is an OpenClaw channel plugin that connects a chat94 iOS/macOS client to an OpenClaw agent through a relay server.
+The chat4000 plugin is an OpenClaw channel plugin that connects a chat4000 iOS/macOS client to an OpenClaw agent through a relay server.
 
 ```text
-chat94 app <-> relay server <-> OpenClaw plugin <-> OpenClaw agent
+chat4000 app <-> relay server <-> OpenClaw plugin <-> OpenClaw agent
 ```
 
 The relay is transport-only. Session plaintext is intended to be visible only to the app and plugin that share the long-lived group key.
 
 ## Product Goals
 
-1. Provide a direct-message channel between the chat94 app and an OpenClaw agent.
+1. Provide a direct-message channel between the chat4000 app and an OpenClaw agent.
 2. Support secure relay transport using a long-lived 32-byte group key.
 3. Support a pairing workflow where the plugin bootstraps the first key and later joiners receive that key through a temporary pairing room.
 4. Support reliable reconnect behavior for long-running plugin sessions.
@@ -90,7 +90,7 @@ Expected outputs:
 The product should persist the long-lived key outside normal OpenClaw channel config.
 
 Expected behavior:
-- relay and debug TLS settings stay in `channels.chat94`
+- relay and debug TLS settings stay in `channels.chat4000`
 - the long-lived key lives in plugin-managed durable storage
 - environment/config-based key input may remain as a migration/override path, not the primary workflow
 
@@ -187,7 +187,7 @@ The product should eventually support non-text outbound/inbound media flows beyo
 
 #### 5.1 Channel registration
 
-The plugin should register as an OpenClaw channel named `chat94`.
+The plugin should register as an OpenClaw channel named `chat4000`.
 
 #### 5.2 Account configuration surface
 
@@ -223,10 +223,10 @@ The plugin should expose host-usable OpenClaw CLI workflows for:
 The product should provide:
 
 ```bash
-openclaw chat94 setup
-openclaw chat94 pair
-openclaw chat94 setup --no-pair
-openclaw chat94 status
+openclaw chat4000 setup
+openclaw chat4000 pair
+openclaw chat4000 setup --no-pair
+openclaw chat4000 status
 ```
 
 Expected operator-facing output:
@@ -285,7 +285,7 @@ The product should support:
 
 | Variable | Meaning | Default |
 |----------|---------|---------|
-| `CHAT94_GROUP_KEY` | manual raw group key override in base64url or hex | none |
+| `CHAT4000_GROUP_KEY` | manual raw group key override in base64url or hex | none |
 
 #### 7.2 Config file shape
 
@@ -294,7 +294,7 @@ The product should support a channel config of this form:
 ```json
 {
   "channels": {
-    "chat94": {
+    "chat4000": {
       "enabled": true,
       "accounts": {
         "work": {
@@ -308,13 +308,13 @@ The product should support a channel config of this form:
 
 The long-lived `groupKey` is expected to live in plugin-managed durable storage rather than normal channel config.
 
-The relay is fixed to the production chat94 endpoint and is not operator-configurable.
+The relay is fixed to the production chat4000 endpoint and is not operator-configurable.
 
 Legacy `groupKey` / `pairKey` config may still be accepted during migration or manual override scenarios.
 
 #### 7.3 Plugin manifest contract
 
-The plugin manifest should expose the required channel env vars for `chat94`.
+The plugin manifest should expose the required channel env vars for `chat4000`.
 
 ### 8. Observability and Validation
 
@@ -347,10 +347,10 @@ These are intended future feature areas and are not part of the minimum contract
 ### Product Commands
 
 ```bash
-openclaw chat94 setup
-openclaw chat94 pair
-openclaw chat94 setup --no-pair
-openclaw chat94 status
+openclaw chat4000 setup
+openclaw chat4000 pair
+openclaw chat4000 setup --no-pair
+openclaw chat4000 status
 ```
 
 ### Repository Commands

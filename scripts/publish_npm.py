@@ -12,12 +12,12 @@ from urllib.parse import urlparse
 
 ROOT = Path.cwd()
 GENERATED_DSN = ROOT / "src" / "telemetry-dsn.generated.ts"
-LOCAL_DSN_COPY = Path.home() / ".config" / "chat94" / "sentry-dsn"
+LOCAL_DSN_COPY = Path.home() / ".config" / "chat4000" / "sentry-dsn"
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Build, validate, and publish the chat94 OpenClaw plugin to npm.",
+        description="Build, validate, and publish the chat4000 OpenClaw plugin to npm.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Run all validation but do not publish.")
     parser.add_argument("--skip-tests", action="store_true", help="Skip npm test.")
@@ -31,8 +31,8 @@ def main() -> None:
         action="store_true",
         help=f"Read DSN from {LOCAL_DSN_COPY} instead of fetching via Sentry CLI.",
     )
-    parser.add_argument("--sentry-org", default=os.environ.get("SENTRY_ORG", "chat94"))
-    parser.add_argument("--sentry-project", default=os.environ.get("SENTRY_PROJECT", "chat94-cli"))
+    parser.add_argument("--sentry-org", default=os.environ.get("SENTRY_ORG", "chat4000"))
+    parser.add_argument("--sentry-project", default=os.environ.get("SENTRY_PROJECT", "chat4000-cli"))
     parser.add_argument(
         "--tag",
         default="latest",

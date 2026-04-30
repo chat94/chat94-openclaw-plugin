@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
-  clearChat94SessionBinding,
-  getChat94SessionBinding,
+  clearChat4000SessionBinding,
+  getChat4000SessionBinding,
   listOpenClawSessionCandidates,
-  setChat94SessionBinding,
+  setChat4000SessionBinding,
 } from "../../src/session-binding.js";
 
 describe("session binding", () => {
@@ -14,7 +14,7 @@ describe("session binding", () => {
   let tempRoot = "";
 
   beforeEach(() => {
-    tempRoot = mkdtempSync(path.join(os.tmpdir(), "chat94-session-binding-"));
+    tempRoot = mkdtempSync(path.join(os.tmpdir(), "chat4000-session-binding-"));
     process.env.OPENCLAW_HOME = tempRoot;
   });
 
@@ -65,7 +65,7 @@ describe("session binding", () => {
     });
   });
 
-  it("persists and clears a chat94 binding", () => {
+  it("persists and clears a chat4000 binding", () => {
     const target = {
       sessionKey: "agent:main:telegram:direct:123",
       agentId: "main",
@@ -77,19 +77,19 @@ describe("session binding", () => {
       lastChannel: "telegram",
     };
 
-    setChat94SessionBinding({
+    setChat4000SessionBinding({
       accountId: "default",
       groupId: "group-1",
       target,
     });
 
-    expect(getChat94SessionBinding({ accountId: "default", groupId: "group-1" })).toMatchObject({
+    expect(getChat4000SessionBinding({ accountId: "default", groupId: "group-1" })).toMatchObject({
       targetSessionKey: target.sessionKey,
       agentId: "main",
       label: "Deploy bug",
     });
 
-    expect(clearChat94SessionBinding({ accountId: "default", groupId: "group-1" })).toBe(true);
-    expect(getChat94SessionBinding({ accountId: "default", groupId: "group-1" })).toBeNull();
+    expect(clearChat4000SessionBinding({ accountId: "default", groupId: "group-1" })).toBe(true);
+    expect(getChat4000SessionBinding({ accountId: "default", groupId: "group-1" })).toBeNull();
   });
 });

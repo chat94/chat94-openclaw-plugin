@@ -12,7 +12,7 @@ export type PairingLoggerContext = {
 };
 
 function resolvePairingLogPath(): string {
-  return path.join(resolveOpenClawHome(), "plugins", "chat94", "logs", "pairing.log");
+  return path.join(resolveOpenClawHome(), "plugins", "chat4000", "logs", "pairing.log");
 }
 
 function nowTimestamp(): string {

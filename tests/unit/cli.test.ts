@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { patchChannelConfig } from "../../src/cli.js";
 
 describe("patchChannelConfig", () => {
-  it("enables chat94 and allowlists it when plugins.allow is present", () => {
+  it("enables chat4000 and allowlists it when plugins.allow is present", () => {
     const next = patchChannelConfig(
       {
         plugins: {
@@ -17,16 +17,16 @@ describe("patchChannelConfig", () => {
     );
 
     expect(next.channels).toEqual({
-      chat94: {
+      chat4000: {
         enabled: true,
         pairingLogLevel: "debug",
         runtimeLogLevel: "info",
       },
     });
     expect(next.plugins).toEqual({
-      allow: ["openai", "browser", "chat94"],
+      allow: ["openai", "browser", "chat4000"],
       entries: {
-        chat94: {
+        chat4000: {
           enabled: true,
         },
       },
@@ -44,7 +44,7 @@ describe("patchChannelConfig", () => {
     );
 
     expect(next.channels).toEqual({
-      chat94: {
+      chat4000: {
         accounts: {
           work: {
             enabled: true,
@@ -57,7 +57,7 @@ describe("patchChannelConfig", () => {
     });
     expect(next.plugins).toEqual({
       entries: {
-        chat94: {
+        chat4000: {
           enabled: true,
         },
       },

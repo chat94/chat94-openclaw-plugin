@@ -1,17 +1,17 @@
 import { stdout as output } from "node:process";
-import { resolveChat94Account } from "./accounts.js";
+import { resolveChat4000Account } from "./accounts.js";
 import { generateGroupKey, generatePairingCode } from "./crypto.js";
-import { dumpChat94Trace } from "./error-log.js";
-import { inspectChat94StateAccess, saveStoredGroupKey } from "./key-store.js";
+import { dumpChat4000Trace } from "./error-log.js";
+import { inspectChat4000StateAccess, saveStoredGroupKey } from "./key-store.js";
 import { hostPairingSession } from "./pairing.js";
 import {
-  clearChat94SessionBinding,
+  clearChat4000SessionBinding,
   findOpenClawSessionCandidate,
-  getChat94SessionBinding,
+  getChat4000SessionBinding,
   listOpenClawSessionCandidates,
-  setChat94SessionBinding,
+  setChat4000SessionBinding,
 } from "./session-binding.js";
-import { captureChat94TestException, getTelemetryStatus, setTelemetryEnabled } from "./telemetry.js";
+import { captureChat4000TestException, getTelemetryStatus, setTelemetryEnabled } from "./telemetry.js";
 
 type PluginApiLike = {
   config?: Record<string, unknown>;
@@ -50,15 +50,15 @@ type SessionBindingOptions = {
   sessionKey?: string;
 };
 
-export function registerChat94Cli(api: PluginApiLike): void {
+export function registerChat4000Cli(api: PluginApiLike): void {
   api.registerCli?.(
     ({ program }) => {
-      const chat94 = program
-        .command("chat94")
-        .description("Manage chat94 pairing and local key state")
+      const chat4000 = program
+        .command("chat4000")
+        .description("Manage chat4000 pairing and local key state")
         .option("--no-telemetry", "Disable anonymous error reporting for this run");
 
-      chat94
+      chat4000
         .command("setup")
         .description("Interactive first-time setup and pairing")
         .option("--account <id>", "Account id", "default")
@@ -69,7 +69,7 @@ export function registerChat94Cli(api: PluginApiLike): void {
           await runInteractiveSetup(api, opts).catch(handleCliError);
         });
 
-      chat94
+      chat4000
         .command("pair")
         .description("Start a new pairing session for another client")
         .option("--account <id>", "Account id", "default")
@@ -79,13 +79,13 @@ export function registerChat94Cli(api: PluginApiLike): void {
           await runPairingCommand(api, opts).catch(handleCliError);
         });
 
-      chat94
+      chat4000
         .command("status")
-        .description("Show current chat94 channel status")
+        .description("Show current chat4000 channel status")
         .option("--account <id>", "Account id", "default")
         .action(async (opts: { account?: string }) => {
           const cfg = loadConfig(api);
-          const account = resolveChat94Account({
+          const account = resolveChat4000Account({
             cfg: cfg as { channels?: Record<string, unknown> },
             accountId: opts.account,
           });
@@ -102,13 +102,13 @@ export function registerChat94Cli(api: PluginApiLike): void {
           );
         });
 
-      const sessions = chat94
+      const sessions = chat4000
         .command("sessions")
-        .description("Inspect and bind chat94 to existing OpenClaw sessions");
+        .description("Inspect and bind chat4000 to existing OpenClaw sessions");
 
       sessions
         .command("list")
-        .description("List recent OpenClaw sessions that chat94 can join")
+        .description("List recent OpenClaw sessions that chat4000 can join")
         .option("--account <id>", "Account id", "default")
         .option("--limit <n>", "Max sessions to show", "20")
         .action(async (opts: SessionListOptions) => {
@@ -117,7 +117,7 @@ export function registerChat94Cli(api: PluginApiLike): void {
 
       sessions
         .command("current")
-        .description("Show the current chat94 session binding")
+        .description("Show the current chat4000 session binding")
         .option("--account <id>", "Account id", "default")
         .action(async (opts: { account?: string }) => {
           await runShowCurrentBinding(api, opts).catch(handleCliError);
@@ -125,7 +125,7 @@ export function registerChat94Cli(api: PluginApiLike): void {
 
       sessions
         .command("bind")
-        .description("Bind chat94 to an existing OpenClaw session key")
+        .description("Bind chat4000 to an existing OpenClaw session key")
         .option("--account <id>", "Account id", "default")
         .option("--session-key <value>", "Existing OpenClaw session key to join")
         .action(async (opts: SessionBindingOptions) => {
@@ -134,13 +134,13 @@ export function registerChat94Cli(api: PluginApiLike): void {
 
       sessions
         .command("clear")
-        .description("Clear the current chat94 session binding")
+        .description("Clear the current chat4000 session binding")
         .option("--account <id>", "Account id", "default")
         .action(async (opts: { account?: string }) => {
           await runClearBinding(api, opts).catch(handleCliError);
         });
 
-      const telemetry = chat94
+      const telemetry = chat4000
         .command("telemetry")
         .description("Manage anonymous error reporting");
 
@@ -151,11 +151,11 @@ export function registerChat94Cli(api: PluginApiLike): void {
           const status = getTelemetryStatus();
           output.write(`Telemetry: ${status.enabled ? "enabled" : "disabled"}\n`);
           if (status.enabled) {
-            output.write("  Disable: openclaw chat94 telemetry disable\n");
-            output.write("  Or set CHAT94_TELEMETRY_DISABLED=1\n");
+            output.write("  Disable: openclaw chat4000 telemetry disable\n");
+            output.write("  Or set CHAT4000_TELEMETRY_DISABLED=1\n");
           } else {
             output.write(`  Source: ${status.reason}\n`);
-            output.write("  Enable: openclaw chat94 telemetry enable\n");
+            output.write("  Enable: openclaw chat4000 telemetry enable\n");
           }
         });
 
@@ -164,8 +164,8 @@ export function registerChat94Cli(api: PluginApiLike): void {
         .description("Disable telemetry persistently")
         .action(() => {
           setTelemetryEnabled(false);
-          output.write("Telemetry disabled. No data will be sent to chat94.\n");
-          output.write("Re-enable: openclaw chat94 telemetry enable\n");
+          output.write("Telemetry disabled. No data will be sent to chat4000.\n");
+          output.write("Re-enable: openclaw chat4000 telemetry enable\n");
         });
 
       telemetry
@@ -174,14 +174,14 @@ export function registerChat94Cli(api: PluginApiLike): void {
         .action(() => {
           setTelemetryEnabled(true);
           output.write("Telemetry enabled. Anonymous error reports will be sent.\n");
-          output.write("Privacy policy: https://chat94.com/privacy\n");
+          output.write("Privacy policy: https://chat4000.com/privacy\n");
         });
 
       telemetry
         .command("test-exception", { hidden: true })
         .description("Send a test exception to Sentry")
         .action(async () => {
-          const sent = await captureChat94TestException();
+          const sent = await captureChat4000TestException();
           output.write(
             sent
               ? "Telemetry test exception sent.\n"
@@ -190,11 +190,11 @@ export function registerChat94Cli(api: PluginApiLike): void {
         });
     },
     {
-      commands: ["chat94"],
+      commands: ["chat4000"],
       descriptors: [
         {
-          name: "chat94",
-          description: "Manage chat94 pairing and local key state",
+          name: "chat4000",
+          description: "Manage chat4000 pairing and local key state",
           hasSubcommands: true,
         },
       ],
@@ -204,7 +204,7 @@ export function registerChat94Cli(api: PluginApiLike): void {
 
 async function runInteractiveSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<void> {
   const cfg = loadConfig(api);
-  const account = resolveChat94Account({
+  const account = resolveChat4000Account({
     cfg: cfg as { channels?: Record<string, unknown> },
     accountId: opts.account,
   });
@@ -219,9 +219,9 @@ async function runInteractiveSetup(api: PluginApiLike, opts: SetupCommandOptions
   });
   ensureLocalKeyForAccount(account);
 
-  output.write("Saved chat94 settings.\n");
+  output.write("Saved chat4000 settings.\n");
   if (shouldSkipPairing(opts)) {
-    output.write('Skipped pairing.\nNext step: "openclaw chat94 pair"\n');
+    output.write('Skipped pairing.\nNext step: "openclaw chat4000 pair"\n');
     return;
   }
 
@@ -236,7 +236,7 @@ async function runInteractiveSetup(api: PluginApiLike, opts: SetupCommandOptions
 
 async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): Promise<boolean> {
   const cfg = loadConfig(api);
-  const account = resolveChat94Account({
+  const account = resolveChat4000Account({
     cfg: cfg as { channels?: Record<string, unknown> },
     accountId: opts.account,
   });
@@ -264,7 +264,7 @@ async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): 
     },
   }).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    const logPath = dumpChat94Trace("cli-pair", error, {
+    const logPath = dumpChat4000Trace("cli-pair", error, {
       accountId: account.accountId,
       code,
       pairingLogLevel,
@@ -275,7 +275,7 @@ async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): 
         `Pairing ended: ${message}`,
         `Trace log: ${logPath}`,
         "If this happened after about 60 seconds, the relay path likely idled out the WebSocket.",
-        'Try again with: "openclaw chat94 pair"',
+        'Try again with: "openclaw chat4000 pair"',
       ].join("\n") + "\n",
     );
     return null;
@@ -286,19 +286,19 @@ async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): 
   }
 
   output.write(`Pairing room: ${result.roomId}\n`);
-  output.write(`Connected group: ${resolveChat94Account({ cfg: cfg as { channels?: Record<string, unknown> }, accountId: account.accountId }).groupId || "(local key ready)"}\n`);
+  output.write(`Connected group: ${resolveChat4000Account({ cfg: cfg as { channels?: Record<string, unknown> }, accountId: account.accountId }).groupId || "(local key ready)"}\n`);
   return true;
 }
 
 async function runListSessions(api: PluginApiLike, opts: SessionListOptions): Promise<void> {
   const cfg = loadConfig(api);
-  const account = resolveChat94Account({
+  const account = resolveChat4000Account({
     cfg: cfg as { channels?: Record<string, unknown> },
     accountId: opts.account,
   });
   const limit = Math.max(1, Number.parseInt(opts.limit ?? "20", 10) || 20);
   const binding = account.groupId
-    ? getChat94SessionBinding({ accountId: account.accountId, groupId: account.groupId })
+    ? getChat4000SessionBinding({ accountId: account.accountId, groupId: account.groupId })
     : null;
   const sessions = listOpenClawSessionCandidates(cfg).slice(0, limit);
   if (sessions.length === 0) {
@@ -316,7 +316,7 @@ async function runListSessions(api: PluginApiLike, opts: SessionListOptions): Pr
       ].join("\n") + "\n",
     );
   }
-  output.write('Bind one with: openclaw chat94 sessions bind --session-key "<session-key>"\n');
+  output.write('Bind one with: openclaw chat4000 sessions bind --session-key "<session-key>"\n');
 }
 
 async function runShowCurrentBinding(
@@ -324,20 +324,20 @@ async function runShowCurrentBinding(
   opts: { account?: string },
 ): Promise<void> {
   const cfg = loadConfig(api);
-  const account = resolveChat94Account({
+  const account = resolveChat4000Account({
     cfg: cfg as { channels?: Record<string, unknown> },
     accountId: opts.account,
   });
   if (!account.groupId) {
-    output.write('No local chat94 key yet. Pair first with: "openclaw chat94 pair"\n');
+    output.write('No local chat4000 key yet. Pair first with: "openclaw chat4000 pair"\n');
     return;
   }
-  const binding = getChat94SessionBinding({
+  const binding = getChat4000SessionBinding({
     accountId: account.accountId,
     groupId: account.groupId,
   });
   if (!binding) {
-    output.write("No bound session. chat94 will use its default route.\n");
+    output.write("No bound session. chat4000 will use its default route.\n");
     return;
   }
   output.write(
@@ -357,28 +357,28 @@ async function runShowCurrentBinding(
 async function runBindSession(api: PluginApiLike, opts: SessionBindingOptions): Promise<void> {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
-    throw new Error('missing --session-key, try: openclaw chat94 sessions bind --session-key "agent:main:telegram:direct:123"');
+    throw new Error('missing --session-key, try: openclaw chat4000 sessions bind --session-key "agent:main:telegram:direct:123"');
   }
   const cfg = loadConfig(api);
-  const account = resolveChat94Account({
+  const account = resolveChat4000Account({
     cfg: cfg as { channels?: Record<string, unknown> },
     accountId: opts.account,
   });
   if (!account.groupId) {
-    throw new Error('chat94 has no local key yet. Pair first with: "openclaw chat94 pair"');
+    throw new Error('chat4000 has no local key yet. Pair first with: "openclaw chat4000 pair"');
   }
   const candidate = findOpenClawSessionCandidate(sessionKey, cfg);
   if (!candidate) {
     throw new Error(`session not found: ${sessionKey}`);
   }
-  const binding = setChat94SessionBinding({
+  const binding = setChat4000SessionBinding({
     accountId: account.accountId,
     groupId: account.groupId,
     target: candidate,
   });
   output.write(
     [
-      `Bound chat94 group ${account.groupId} to ${binding.targetSessionKey}`,
+      `Bound chat4000 group ${account.groupId} to ${binding.targetSessionKey}`,
       `agent: ${binding.agentId}`,
       `label: ${binding.label}`,
       ...(binding.lastPreview ? [`preview: ${binding.lastPreview}`] : []),
@@ -391,19 +391,19 @@ async function runClearBinding(
   opts: { account?: string },
 ): Promise<void> {
   const cfg = loadConfig(api);
-  const account = resolveChat94Account({
+  const account = resolveChat4000Account({
     cfg: cfg as { channels?: Record<string, unknown> },
     accountId: opts.account,
   });
   if (!account.groupId) {
-    output.write("No local chat94 key found, nothing to clear.\n");
+    output.write("No local chat4000 key found, nothing to clear.\n");
     return;
   }
-  const cleared = clearChat94SessionBinding({
+  const cleared = clearChat4000SessionBinding({
     accountId: account.accountId,
     groupId: account.groupId,
   });
-  output.write(cleared ? "Cleared chat94 session binding.\n" : "No chat94 session binding was set.\n");
+  output.write(cleared ? "Cleared chat4000 session binding.\n" : "No chat4000 session binding was set.\n");
 }
 
 function loadConfig(api: PluginApiLike): Record<string, unknown> {
@@ -426,7 +426,7 @@ function ensureLocalKeyForAccount(account: {
   if (groupKeyBytes.length !== 32) {
     groupKeyBytes = generateGroupKey();
     const stored = saveStoredGroupKey(account.accountId, groupKeyBytes);
-      output.write(`Created local chat94 key.\nKey file: ${stored.path}\n`);
+      output.write(`Created local chat4000 key.\nKey file: ${stored.path}\n`);
   }
   return groupKeyBytes;
 }
@@ -445,7 +445,7 @@ async function writeChannelConfig(
     await api.runtime.config.writeConfigFile(next);
     return;
   }
-  throw new Error("chat94 setup cannot persist config in this runtime");
+  throw new Error("chat4000 setup cannot persist config in this runtime");
 }
 
 export function patchChannelConfig(
@@ -457,13 +457,13 @@ export function patchChannelConfig(
   },
 ): Record<string, unknown> {
   const channels = { ...((cfg.channels as Record<string, unknown> | undefined) ?? {}) };
-  const currentChannel = { ...((channels.chat94 as Record<string, unknown> | undefined) ?? {}) };
+  const currentChannel = { ...((channels.chat4000 as Record<string, unknown> | undefined) ?? {}) };
   const plugins = { ...((cfg.plugins as Record<string, unknown> | undefined) ?? {}) };
   const entries = {
     ...((plugins.entries as Record<string, Record<string, unknown>> | undefined) ?? {}),
   };
-  entries.chat94 = {
-    ...(entries.chat94 ?? {}),
+  entries.chat4000 = {
+    ...(entries.chat4000 ?? {}),
     enabled: true,
   };
   plugins.entries = entries;
@@ -471,7 +471,7 @@ export function patchChannelConfig(
     ? plugins.allow.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     : undefined;
   if (currentAllow) {
-    plugins.allow = currentAllow.includes("chat94") ? currentAllow : [...currentAllow, "chat94"];
+    plugins.allow = currentAllow.includes("chat4000") ? currentAllow : [...currentAllow, "chat4000"];
   }
 
   if (params.accountId === "default") {
@@ -494,13 +494,13 @@ export function patchChannelConfig(
     }
   }
 
-  channels.chat94 = currentChannel;
+  channels.chat4000 = currentChannel;
   return { ...cfg, channels, plugins };
 }
 
 function buildPairingQrPayload(params: { code?: string }): string {
   const code = params.code ?? "";
-  return `chat94://pair?code=${encodeURIComponent(code)}`;
+  return `chat4000://pair?code=${encodeURIComponent(code)}`;
 }
 
 async function renderQrIfAvailable(payload: string): Promise<void> {
@@ -541,8 +541,8 @@ function formatStatus(status: string): string {
 
 function handleCliError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  const logPath = dumpChat94Trace("cli", error);
-  output.write(`chat94 error: ${message}\nTrace log: ${logPath}\n`);
+  const logPath = dumpChat4000Trace("cli", error);
+  output.write(`chat4000 error: ${message}\nTrace log: ${logPath}\n`);
 }
 
 function normalizePairingLogLevel(value: string | undefined): "info" | "debug" {
@@ -550,7 +550,7 @@ function normalizePairingLogLevel(value: string | undefined): "info" | "debug" {
 }
 
 function assertStateAccess(accountId: string): void {
-  const access = inspectChat94StateAccess(accountId);
+  const access = inspectChat4000StateAccess(accountId);
   if (!access.hasOwnershipMismatch) {
     return;
   }
@@ -562,8 +562,8 @@ function assertStateAccess(accountId: string): void {
     typeof access.preferredOwnerUid === "number" ? String(access.preferredOwnerUid) : "unknown";
   throw new Error(
     [
-      `chat94 state dir is owned by uid ${expected}, but this command is running as uid ${current}.`,
-      "Run `openclaw chat94 pair` as the same user that runs OpenClaw.",
+      `chat4000 state dir is owned by uid ${expected}, but this command is running as uid ${current}.`,
+      "Run `openclaw chat4000 pair` as the same user that runs OpenClaw.",
       `State dir: ${access.stateDir}`,
     ].join(" "),
   );
@@ -586,7 +586,7 @@ function formatRelativeTime(timestampMs: number): string {
 function renderPairingCodeBanner(code: string): string {
   const lines = [
     "╔════════════════════════════════════════════════════════════════════════════════════════════╗",
-    "║                                     CHAT94 PAIRING                                       ║",
+    "║                                     CHAT4000 PAIRING                                       ║",
     "╠════════════════════════════════════════════════════════════════════════════════════════════╣",
   ];
 

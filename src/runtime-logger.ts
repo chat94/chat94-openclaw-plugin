@@ -11,7 +11,7 @@ export type RuntimeLoggerContext = {
 };
 
 function resolveRuntimeLogPath(): string {
-  return path.join(resolveOpenClawHome(), "plugins", "chat94", "logs", "runtime.log");
+  return path.join(resolveOpenClawHome(), "plugins", "chat4000", "logs", "runtime.log");
 }
 
 function nowTimestamp(): string {

@@ -84,9 +84,9 @@ describe("protocol", () => {
       from: {
         role: "plugin",
         device_id: "plugin-instance",
-        device_name: "OpenClaw chat94",
+        device_name: "OpenClaw chat4000",
         app_version: "1.0.0",
-        bundle_id: "@chat94/openclaw-plugin",
+        bundle_id: "@chat4000/openclaw-plugin",
       },
       body: { text: "hello" },
       ts: 1713000000000,
@@ -94,7 +94,7 @@ describe("protocol", () => {
     const parsed = JSON.parse(JSON.stringify(inner));
     expect(parsed).toEqual(inner);
     expect(parsed.from.app_version).toBe("1.0.0");
-    expect(parsed.from.bundle_id).toBe("@chat94/openclaw-plugin");
+    expect(parsed.from.bundle_id).toBe("@chat4000/openclaw-plugin");
   });
 
   it("inner streaming and status formats", () => {

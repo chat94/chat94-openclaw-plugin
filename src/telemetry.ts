@@ -9,7 +9,7 @@ import { SENTRY_DSN } from "./telemetry-dsn.generated.js";
 // Sentry project creation/auth tokens must stay outside the repo. The runtime
 // DSN is generated locally into telemetry-dsn.generated.ts before packaging.
 const PACKAGE_VERSION = readPackageVersion();
-const CONFIG_DIR = path.join(os.homedir(), ".config", "chat94");
+const CONFIG_DIR = path.join(os.homedir(), ".config", "chat4000");
 const INSTALL_ID_PATH = path.join(CONFIG_DIR, "install-id");
 const NOTICE_SHOWN_PATH = path.join(CONFIG_DIR, "notice-shown");
 const TELEMETRY_ENABLED_PATH = path.join(CONFIG_DIR, "telemetry-enabled");
@@ -25,7 +25,7 @@ export type TelemetryStatus = {
   persistentConfigPath: string;
 };
 
-export function initializeChat94Telemetry(): void {
+export function initializeChat4000Telemetry(): void {
   if (telemetryInitialized) return;
   telemetryInitialized = true;
   if (isTelemetryControlCommand(process.argv)) return;
@@ -47,7 +47,7 @@ export function initializeChat94Telemetry(): void {
         sampleRate: 0.2,
         tracesSampleRate: 0,
         beforeSend: scrubEvent,
-        release: `chat94-plugin@${PACKAGE_VERSION}`,
+        release: `chat4000-plugin@${PACKAGE_VERSION}`,
         environment: process.env.NODE_ENV || "production",
         initialScope: {
           user: { id: status.installId },
@@ -72,25 +72,25 @@ export function initializeChat94Telemetry(): void {
 }
 
 function isTelemetryControlCommand(argv: string[]): boolean {
-  const chat94Index = argv.indexOf("chat94");
-  if (chat94Index === -1) return false;
-  return argv.slice(chat94Index + 1).includes("telemetry");
+  const chat4000Index = argv.indexOf("chat4000");
+  if (chat4000Index === -1) return false;
+  return argv.slice(chat4000Index + 1).includes("telemetry");
 }
 
-export function captureChat94Exception(error: unknown, scope?: string): void {
+export function captureChat4000Exception(error: unknown, scope?: string): void {
   if (!sentryClient) return;
   sentryClient.withScope((sentryScope) => {
-    if (scope) sentryScope.setTag("chat94_scope", scrubSecrets(scope));
+    if (scope) sentryScope.setTag("chat4000_scope", scrubSecrets(scope));
     sentryClient?.captureException(error);
   });
 }
 
-export async function captureChat94TestException(): Promise<boolean> {
-  initializeChat94Telemetry();
+export async function captureChat4000TestException(): Promise<boolean> {
+  initializeChat4000Telemetry();
   await sentryReady;
   if (!sentryClient) return false;
-  captureChat94Exception(
-    new Error("chat94 telemetry test exception token=secret sk-abcdefghijklmnopqrstuvwxyz123456"),
+  captureChat4000Exception(
+    new Error("chat4000 telemetry test exception token=secret sk-abcdefghijklmnopqrstuvwxyz123456"),
     "telemetry-test",
   );
   await sentryClient.flush(2_000);
@@ -103,7 +103,7 @@ export function getTelemetryStatus(argv: string[] = process.argv): TelemetryStat
     return { enabled: false, reason: "flag", installId, persistentConfigPath: TELEMETRY_ENABLED_PATH };
   }
 
-  const envVar = process.env.CHAT94_TELEMETRY_DISABLED?.trim().toLowerCase();
+  const envVar = process.env.CHAT4000_TELEMETRY_DISABLED?.trim().toLowerCase();
   if (envVar === "1" || envVar === "true" || envVar === "yes") {
     return { enabled: false, reason: "env", installId, persistentConfigPath: TELEMETRY_ENABLED_PATH };
   }
@@ -198,17 +198,17 @@ function maybePrintFirstRunNotice(): void {
     if (existsSync(NOTICE_SHOWN_PATH)) return;
     process.stderr.write(
       [
-        `chat94-plugin v${PACKAGE_VERSION}`,
+        `chat4000-plugin v${PACKAGE_VERSION}`,
         "",
         "Anonymous error reports help us fix bugs faster. We collect crash data",
         "and error traces -- never message content, prompts, command arguments,",
         "or environment variables.",
         "",
         "To opt out:",
-        "  openclaw chat94 telemetry disable",
-        "  or set CHAT94_TELEMETRY_DISABLED=1",
+        "  openclaw chat4000 telemetry disable",
+        "  or set CHAT4000_TELEMETRY_DISABLED=1",
         "",
-        "Privacy policy: https://chat94.com/privacy",
+        "Privacy policy: https://chat4000.com/privacy",
         "",
       ].join("\n"),
     );
