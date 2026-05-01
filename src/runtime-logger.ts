@@ -2,6 +2,7 @@ import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { resolveOpenClawHome } from "./key-store.js";
+import { rotateLogIfOversized } from "./log-rotate.js";
 
 export type RuntimeLogLevel = "info" | "debug";
 
@@ -74,7 +75,9 @@ export class RuntimeLogger {
 
     try {
       mkdirSync(path.dirname(this.logPath), { recursive: true });
-      appendFileSync(this.logPath, `${line}\n`, {
+      const payload = `${line}\n`;
+      rotateLogIfOversized(this.logPath, Buffer.byteLength(payload, "utf8"));
+      appendFileSync(this.logPath, payload, {
         encoding: "utf8",
         mode: 0o600,
       });

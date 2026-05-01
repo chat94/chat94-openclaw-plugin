@@ -1,6 +1,7 @@
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawHome } from "./key-store.js";
+import { rotateLogIfOversized } from "./log-rotate.js";
 import { captureChat4000Exception } from "./telemetry.js";
 
 function resolveChat4000LogDir(): string {
@@ -40,7 +41,9 @@ export function dumpChat4000Trace(
 
   lines.push("");
 
-  appendFileSync(logPath, `${lines.join("\n")}\n`, {
+  const payload = `${lines.join("\n")}\n`;
+  rotateLogIfOversized(logPath, Buffer.byteLength(payload, "utf8"));
+  appendFileSync(logPath, payload, {
     encoding: "utf8",
     mode: 0o600,
   });
