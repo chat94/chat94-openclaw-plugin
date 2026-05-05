@@ -130,11 +130,17 @@ export async function sendMessageChat4000(
 }
 
 export function sendStreamDelta(groupId: string, streamId: string, delta: string): void {
+  // Intermediate streaming chunk: not notification-worthy on its own.
   sendInnerMessage(groupId, "text_delta", { delta }, streamId);
 }
 
 export function sendStreamEnd(groupId: string, streamId: string, fullText: string): void {
-  sendInnerMessage(groupId, "text_end", { text: fullText }, streamId);
+  // Final agent-reply frame for this stream — flag it so the relay wakes a
+  // backgrounded iOS app via APNs (§6.4 / §7). Streaming deltas and status
+  // updates remain notify_if_offline=false.
+  sendInnerMessage(groupId, "text_end", { text: fullText }, streamId, {
+    notifyIfOffline: true,
+  });
 }
 
 export function sendStatus(groupId: string, status: "thinking" | "typing" | "idle"): void {

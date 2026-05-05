@@ -84,9 +84,9 @@ describe("send", () => {
     });
   });
 
-  it("sends stream end", () => {
+  it("sends stream end with notify_if_offline=true (final agent-reply frame)", () => {
     sendStreamEnd(groupId, "stream-1", "full text");
-    expect(sentMessages[0]!.payload.notify_if_offline).toBeUndefined();
+    expect(sentMessages[0]!.payload.notify_if_offline).toBe(true);
     const inner = parseInnerMessage(sentMessages[0]!);
     expect(inner).toMatchObject({
       t: "text_end",
