@@ -1,11 +1,17 @@
 /**
  * Persistent ack/dedupe store for the chat4000 plugin.
  *
- * Backed by Node.js's built-in `node:sqlite` module (synchronous DatabaseSync).
- * Available unflagged in Node ≥23, behind `--experimental-sqlite` in Node 22.5+.
+ * Backed by `node-sqlite3-wasm` — pure WebAssembly SQLite with a Node-fs
+ * VFS that translates SQLite's OS interface to `fs.openSync` / `readSync` /
+ * `writeSync` / `fsyncSync`. This gives us full WAL durability on disk
+ * (`<dbPath>` + `<dbPath>-wal` + `<dbPath>-shm`) without a native binary,
+ * without any postinstall script, and without depending on Node version
+ * features (works on Node ≥18 unchanged; survives OpenClaw's
+ * `npm install --ignore-scripts` plugin install policy).
+ *
  * Each account gets its own database at
- * `<openclaw-state>/plugins/chat4000/state/<accountId>.sqlite` so that pairing
- * rotations or multi-account setups never share watermarks.
+ * `<openclaw-state>/plugins/chat4000/state/<accountId>.sqlite` so that
+ * pairing rotations or multi-account setups never share watermarks.
  *
  * Stored data:
  *   - `meta`: per `(group_id, role)` cumulative `last_acked_seq` for Flow A
@@ -15,7 +21,7 @@
  *   - `inner_acks`: enforces "at most one inner ack per (refs, stage)" so
  *     duplicate inbound msgs from a redrive don't double-emit Flow B acks.
  */
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { Database, type Statement } from "node-sqlite3-wasm";
 import { existsSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawHome } from "./key-store.js";
@@ -78,25 +84,29 @@ export function resolveAckStorePath(accountId: string): string {
 const cache = new Map<string, Chat4000AckStore>();
 
 export class Chat4000AckStore {
-  private readonly db: DatabaseSync;
+  private readonly db: Database;
 
-  private readonly stmtGetWatermark: StatementSync;
+  private readonly stmtGetWatermark: Statement;
 
-  private readonly stmtUpsertWatermark: StatementSync;
+  private readonly stmtUpsertWatermark: Statement;
 
-  private readonly stmtInsertMessage: StatementSync;
+  private readonly stmtInsertMessage: Statement;
 
-  private readonly stmtHasMessage: StatementSync;
+  private readonly stmtHasMessage: Statement;
 
-  private readonly stmtInsertInnerAck: StatementSync;
+  private readonly stmtInsertInnerAck: Statement;
 
   constructor(public readonly dbPath: string) {
     const dir = path.dirname(dbPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    // node:sqlite uses exec() for PRAGMAs; there is no .pragma() helper.
-    this.db = new DatabaseSync(dbPath);
+    this.db = new Database(dbPath);
+    // Request WAL but accept whatever the WASM VFS supports. node-sqlite3-wasm
+    // can't expose the shared-memory primitives WAL needs, so SQLite silently
+    // falls back to DELETE journal mode. DELETE + synchronous=FULL is still
+    // ACID across crashes — every commit fsyncs the rollback journal before
+    // touching the main file. The watermark/dedupe contract holds either way.
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA synchronous = FULL");
     this.db.exec(SCHEMA_SQL);
@@ -140,9 +150,9 @@ export class Chat4000AckStore {
    * pre-ack relays will ignore the field.
    */
   getLastAckedSeq(groupId: string, role: AckStoreRole = "plugin"): number {
-    const row = this.stmtGetWatermark.get(groupId, role) as
+    const row = this.stmtGetWatermark.get([groupId, role]) as
       | { last_acked_seq: number }
-      | undefined;
+      | null;
     return row?.last_acked_seq ?? 0;
   }
 
@@ -153,7 +163,7 @@ export class Chat4000AckStore {
     if (!Number.isFinite(seq) || seq < 0) {
       return;
     }
-    this.stmtUpsertWatermark.run(groupId, role, Math.floor(seq), Date.now());
+    this.stmtUpsertWatermark.run([groupId, role, Math.floor(seq), Date.now()]);
   }
 
   /**
@@ -169,21 +179,19 @@ export class Chat4000AckStore {
     innerT?: string;
     ts?: number;
   }): RecordInboundResult {
-    const result = this.stmtInsertMessage.run(
+    const result = this.stmtInsertMessage.run([
       params.msgId,
       params.groupId,
       params.seq ?? null,
       params.innerT ?? null,
       params.ts ?? null,
       Date.now(),
-    );
-    // node:sqlite may return `changes` as bigint depending on config;
-    // normalize before comparison.
+    ]);
     return { isNew: Number(result.changes) === 1 };
   }
 
   hasInboundMessage(msgId: string): boolean {
-    return this.stmtHasMessage.get(msgId) != null;
+    return this.stmtHasMessage.get([msgId]) != null;
   }
 
   /**
@@ -196,12 +204,12 @@ export class Chat4000AckStore {
     refs: string;
     stage: string;
   }): MarkInnerAckResult {
-    const result = this.stmtInsertInnerAck.run(
+    const result = this.stmtInsertInnerAck.run([
       params.groupId,
       params.refs,
       params.stage,
       Date.now(),
-    );
+    ]);
     return { isNew: Number(result.changes) === 1 };
   }
 

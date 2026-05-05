@@ -1,6 +1,6 @@
 {
   "name": "@chat4000/openclaw-plugin",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "OpenClaw channel plugin for chat4000 — routes messages through E2E encrypted relay",
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -19,10 +19,10 @@
     "publish:npm": "python3.12 scripts/publish_npm.py",
     "publish:npm:dry-run": "python3.12 scripts/publish_npm.py --dry-run",
     "build": "tsc",
-    "test": "node --experimental-sqlite --no-warnings ./node_modules/vitest/vitest.mjs run --project unit",
-    "test:contract": "node --experimental-sqlite --no-warnings ./node_modules/vitest/vitest.mjs run --project contract",
-    "test:all": "node --experimental-sqlite --no-warnings ./node_modules/vitest/vitest.mjs run",
-    "test:watch": "node --experimental-sqlite --no-warnings ./node_modules/vitest/vitest.mjs"
+    "test": "vitest run --project unit",
+    "test:contract": "vitest run --project contract",
+    "test:all": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -55,10 +55,11 @@
   "dependencies": {
     "@noble/ciphers": "^2.2.0",
     "@sentry/node": "^8.55.1",
+    "node-sqlite3-wasm": "^0.8.56",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.20.0"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=18.17.0"
   }
 }
