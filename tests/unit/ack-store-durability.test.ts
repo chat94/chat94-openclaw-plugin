@@ -13,10 +13,10 @@
  * table will let us double-emit Flow B receipts.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Chat4000AckStore } from "../../src/ack-store.js";
+import { Chat4000AckStore, cleanupStaleAckStoreLock } from "../../src/ack-store.js";
 
 describe("Chat4000AckStore — durability across reopen", () => {
   let tmp: string;
@@ -201,6 +201,77 @@ describe("Chat4000AckStore — durability across reopen", () => {
       ).toBe(false);
       b.close();
     }
+  });
+});
+
+describe("Chat4000AckStore — stale lock recovery (1.1.4 fix)", () => {
+  let tmp: string;
+  let dbPath: string;
+  const groupA = "a".repeat(64);
+
+  beforeEach(() => {
+    tmp = mkdtempSync(path.join(tmpdir(), "chat4000-lockrec-"));
+    dbPath = path.join(tmp, "default.sqlite");
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("constructor removes a stale lock dir left by a prior killed process", () => {
+    // Simulate the failure mode: a previous gateway acquired the lock
+    // (mkdir <db>.lock) and got killed before it could rmdir it.
+    {
+      const first = new Chat4000AckStore(dbPath);
+      first.setLastAckedSeq(groupA, 7);
+      first.close();
+    }
+    // Manually create the orphaned lock dir.
+    const lockDir = `${dbPath}.lock`;
+    mkdirSync(lockDir);
+    expect(existsSync(lockDir)).toBe(true);
+
+    // Open a new store. Without the recovery, this would throw "database
+    // is locked". With the recovery, the lock is silently removed and
+    // the open succeeds.
+    const second = new Chat4000AckStore(dbPath);
+    expect(second.getLastAckedSeq(groupA)).toBe(7);
+    second.close();
+  });
+
+  it("constructor cleans up a stale lock dir even if it contains files", () => {
+    // The library doesn't put files inside the lock dir today, but be defensive.
+    {
+      const first = new Chat4000AckStore(dbPath);
+      first.close();
+    }
+    const lockDir = `${dbPath}.lock`;
+    mkdirSync(lockDir);
+    writeFileSync(path.join(lockDir, "some-stale-file"), "leftover");
+
+    expect(() => {
+      const s = new Chat4000AckStore(dbPath);
+      s.close();
+    }).not.toThrow();
+    expect(existsSync(lockDir)).toBe(false);
+  });
+
+  it("cleanupStaleAckStoreLock(path) returns true when a lock was removed, false when none existed", () => {
+    expect(cleanupStaleAckStoreLock(dbPath)).toBe(false); // nothing to clean
+    mkdirSync(`${dbPath}.lock`);
+    expect(cleanupStaleAckStoreLock(dbPath)).toBe(true); // removed
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    expect(cleanupStaleAckStoreLock(dbPath)).toBe(false); // already gone
+  });
+
+  it("with _skipStaleLockCleanup=true, an existing lock dir blocks the open (control test)", () => {
+    // This proves the cleanup is what's enabling recovery in the test above.
+    {
+      const first = new Chat4000AckStore(dbPath);
+      first.close();
+    }
+    mkdirSync(`${dbPath}.lock`);
+    expect(() => new Chat4000AckStore(dbPath, { _skipStaleLockCleanup: true })).toThrow();
   });
 });
 

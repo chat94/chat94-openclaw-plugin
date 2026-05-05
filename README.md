@@ -41,6 +41,7 @@ openclaw plugin install $(pwd)
 ```sh
 openclaw chat4000 setup                    # first-time install + pair
 openclaw chat4000 pair                     # add another device
+openclaw chat4000 upgrade                  # upgrade to latest npm version + cleanup
 openclaw chat4000 status                   # connection + key info
 openclaw chat4000 sessions list            # OpenClaw sessions you can bind to
 openclaw chat4000 sessions current         # current binding
@@ -49,6 +50,20 @@ openclaw chat4000 sessions clear ...       # remove a binding
 openclaw chat4000 telemetry status         # is anonymous error reporting on?
 openclaw chat4000 --help                   # full flag list
 ```
+
+### Upgrading
+
+```sh
+openclaw chat4000 upgrade                  # latest from npm, with stale-state cleanup
+openclaw chat4000 upgrade --version 1.1.4  # pin a specific version
+openclaw gateway restart                   # then reload the gateway
+```
+
+`upgrade` wraps `openclaw plugins install --force @chat4000/openclaw-plugin@<version>` and
+proactively removes any stale `<account>.sqlite.lock/` directory left behind by a
+previous gateway that was killed mid-write (kill -9, container restart, OOM). 1.1.4+
+stores self-recover on open, but the explicit cleanup makes upgrades from older
+versions seamless too.
 
 Pair with verbose logs:
 ```sh

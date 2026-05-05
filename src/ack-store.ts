@@ -22,7 +22,7 @@
  *     duplicate inbound msgs from a redrive don't double-emit Flow B acks.
  */
 import { Database, type Statement } from "node-sqlite3-wasm";
-import { existsSync, mkdirSync, statSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, chmodSync, rmSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawHome } from "./key-store.js";
 
@@ -81,6 +81,38 @@ export function resolveAckStorePath(accountId: string): string {
   return path.join(resolveStateDir(), `${sanitizeAccountId(accountId)}.sqlite`);
 }
 
+/**
+ * Remove a stale lock directory left behind by a previously-killed process.
+ *
+ * `node-sqlite3-wasm` uses `<dbPath>.lock/` as its mkdir-based lock primitive
+ * (its WASM VFS can't use OS file locks the way native SQLite can). The
+ * library `fs.mkdirSync`s to acquire and `fs.rmdirSync`s to release. When the
+ * previous process is killed (-9, OOM, container restart, gateway upgrade,
+ * etc.) between those two calls, the lock dir is left behind. The next open
+ * then throws SQLITE_BUSY ("database is locked") and the channel auto-restart
+ * loop never recovers.
+ *
+ * The plugin is single-process (one OpenClaw gateway, one chat4000 channel
+ * per account). Any pre-existing lock dir at construction time is by
+ * definition stale — we haven't acquired anything yet. Remove it.
+ *
+ * Returns true if a stale lock was removed, so the caller can log/audit.
+ */
+export function cleanupStaleAckStoreLock(dbPath: string): boolean {
+  const lockDir = `${dbPath}.lock`;
+  if (!existsSync(lockDir)) {
+    return false;
+  }
+  try {
+    rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    // Best effort. If removal fails the next open will throw with the
+    // canonical "database is locked" error and the caller surfaces it.
+    return false;
+  }
+}
+
 const cache = new Map<string, Chat4000AckStore>();
 
 export class Chat4000AckStore {
@@ -96,10 +128,20 @@ export class Chat4000AckStore {
 
   private readonly stmtInsertInnerAck: Statement;
 
-  constructor(public readonly dbPath: string) {
+  constructor(
+    public readonly dbPath: string,
+    opts?: {
+      /** Test-only: skip stale-lock recovery so the test can simulate "another
+       *  live process holds the lock" by manually creating the lock dir. */
+      _skipStaleLockCleanup?: boolean;
+    },
+  ) {
     const dir = path.dirname(dbPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
+    }
+    if (!opts?._skipStaleLockCleanup) {
+      cleanupStaleAckStoreLock(dbPath);
     }
     this.db = new Database(dbPath);
     // Request WAL but accept whatever the WASM VFS supports. node-sqlite3-wasm
