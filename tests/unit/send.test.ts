@@ -58,7 +58,7 @@ describe("send", () => {
     expect(inner.body).toEqual({ text: "hello agent" });
     expect(inner.from).toMatchObject({
       role: "plugin",
-      app_version: "1.1.0",
+      app_version: "1.1.1",
       bundle_id: "@chat4000/openclaw-plugin",
     });
     expect(typeof inner.ts).toBe("number");

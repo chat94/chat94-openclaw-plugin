@@ -329,7 +329,50 @@ The repo should provide commands that let operators verify:
 - the unit suite passes
 - relay contract behavior passes when the external relay binary is available
 
-### 9. Future Capability Areas
+### 9. Reliable Delivery and Acknowledgements
+
+This feature area implements the protocol §6.6 acknowledgement layer so messages are not silently lost when a TCP socket dies between kernel-ACK and app-process read.
+
+#### 9.1 Persistent ack watermark (Flow A)
+
+The plugin should maintain a durable per-recipient cumulative high-water mark `last_acked_seq` for the `(group_id, role=plugin)` triple. Storage lives outside any in-memory cache.
+
+#### 9.2 Reconnect replay marker
+
+The plugin should send `last_acked_seq` on every `hello`. The relay redrives only entries with `seq > last_acked_seq` for that recipient. Pre-ack relays ignore the field.
+
+#### 9.3 Cumulative `recv_ack` emission (Flow A)
+
+The plugin should emit outer `recv_ack` envelopes after stably persisting an inbound message. Triggers, whichever fires first:
+- 32 newly persisted seqs are pending
+- 50 ms have elapsed since the most recent persistence
+- the plugin is about to clean-shutdown (final flush)
+
+`up_to_seq` is the contiguous high-water mark; out-of-order persisted seqs above it are reported as `ranges`.
+
+#### 9.4 Inner `ack` emission (Flow B)
+
+The plugin should emit an encrypted inner `t: "ack"` message with `body.refs = <inbound msg_id>` and `body.stage = "received"` for every inbound `text`/`image`/`audio` from `from.role == "app"`, immediately after successful decrypt + body-shape parse, before handing the prompt to the agent. Idempotent on `(group_id, refs, stage)`.
+
+The plugin should not emit Flow B acks for `text_delta`, `text_end`, `status`, or inbound `ack` frames. The optional `processing` and `displayed` stages are not emitted in v1; first-token streaming via `text_delta` is the canonical "agent typing" signal.
+
+#### 9.5 Message dedupe by `msg_id`
+
+The plugin should treat duplicate inner `msg_id` values from relay redrives as already-processed: re-emit the new outer `seq` for `recv_ack` so the relay queue evicts it, but do not re-dispatch to the agent runtime and do not re-emit the inner ack.
+
+#### 9.6 Application-layer keepalive
+
+The plugin should send an outer `ping` envelope every 25 s of socket-write idle (distinct from WebSocket frame-level keepalive) and reply to relay-initiated `ping` with `pong`. A missed `pong` should trigger socket teardown so the reconnect layer takes over.
+
+#### 9.7 Pre-ack relay compatibility
+
+The plugin should gracefully degrade when the relay does not assign `seq` on outbound `msg`: no `recv_ack` is emitted, no `last_acked_seq` is persisted, no inner `ack` is emitted. Existing message flow remains unaffected.
+
+#### 9.8 Version policy parsing
+
+The plugin should parse `hello_ok.version_policy` (its own app-id policy) and ignore `hello_ok.plugin_version_policy` (which is a hint targeted at apps observing this plugin's version).
+
+### 10. Future Capability Areas
 
 These are intended future feature areas and are not part of the minimum contract unless promoted into numbered features above:
 - reactions
@@ -372,5 +415,6 @@ Example:
 - `1.4` means pairing flow
 - `4.3` means streaming text
 - `5.5` means inbound dispatch into the OpenClaw runtime
+- `9.4` means inner `ack` emission (Flow B)
 
 Do not duplicate the full status matrix here when `docs/status.md` is the active source of implementation status.

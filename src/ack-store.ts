@@ -1,9 +1,11 @@
 /**
  * Persistent ack/dedupe store for the chat4000 plugin.
  *
- * Backed by SQLite (better-sqlite3, sync). Each account gets its own database
- * at `<openclaw-state>/plugins/chat4000/state/<accountId>.sqlite` so that
- * pairing rotations or multi-account setups never share watermarks.
+ * Backed by Node.js's built-in `node:sqlite` module (synchronous DatabaseSync).
+ * Available unflagged in Node ≥23, behind `--experimental-sqlite` in Node 22.5+.
+ * Each account gets its own database at
+ * `<openclaw-state>/plugins/chat4000/state/<accountId>.sqlite` so that pairing
+ * rotations or multi-account setups never share watermarks.
  *
  * Stored data:
  *   - `meta`: per `(group_id, role)` cumulative `last_acked_seq` for Flow A
@@ -13,7 +15,7 @@
  *   - `inner_acks`: enforces "at most one inner ack per (refs, stage)" so
  *     duplicate inbound msgs from a redrive don't double-emit Flow B acks.
  */
-import Database, { type Database as DatabaseType, type Statement } from "better-sqlite3";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { existsSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import path from "node:path";
 import { resolveOpenClawHome } from "./key-store.js";
@@ -76,26 +78,27 @@ export function resolveAckStorePath(accountId: string): string {
 const cache = new Map<string, Chat4000AckStore>();
 
 export class Chat4000AckStore {
-  private readonly db: DatabaseType;
+  private readonly db: DatabaseSync;
 
-  private readonly stmtGetWatermark: Statement;
+  private readonly stmtGetWatermark: StatementSync;
 
-  private readonly stmtUpsertWatermark: Statement;
+  private readonly stmtUpsertWatermark: StatementSync;
 
-  private readonly stmtInsertMessage: Statement;
+  private readonly stmtInsertMessage: StatementSync;
 
-  private readonly stmtHasMessage: Statement;
+  private readonly stmtHasMessage: StatementSync;
 
-  private readonly stmtInsertInnerAck: Statement;
+  private readonly stmtInsertInnerAck: StatementSync;
 
   constructor(public readonly dbPath: string) {
     const dir = path.dirname(dbPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });
     }
-    this.db = new Database(dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = FULL");
+    // node:sqlite uses exec() for PRAGMAs; there is no .pragma() helper.
+    this.db = new DatabaseSync(dbPath);
+    this.db.exec("PRAGMA journal_mode = WAL");
+    this.db.exec("PRAGMA synchronous = FULL");
     this.db.exec(SCHEMA_SQL);
     try {
       // Tighten file permissions; best-effort.
@@ -174,11 +177,13 @@ export class Chat4000AckStore {
       params.ts ?? null,
       Date.now(),
     );
-    return { isNew: result.changes === 1 };
+    // node:sqlite may return `changes` as bigint depending on config;
+    // normalize before comparison.
+    return { isNew: Number(result.changes) === 1 };
   }
 
   hasInboundMessage(msgId: string): boolean {
-    return this.stmtHasMessage.get(msgId) !== undefined;
+    return this.stmtHasMessage.get(msgId) != null;
   }
 
   /**
@@ -197,7 +202,7 @@ export class Chat4000AckStore {
       params.stage,
       Date.now(),
     );
-    return { isNew: result.changes === 1 };
+    return { isNew: Number(result.changes) === 1 };
   }
 
   close(): void {
