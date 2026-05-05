@@ -425,11 +425,21 @@ export const chat4000Plugin = {
             sendStreamDelta(ctx.account.groupId, streamId, delta);
           };
 
+          // Per protocol §6.4.2: a stream_id is append-only. To abandon a
+          // partial stream and continue with different text, end the old one
+          // with `reset: true` (so the iPhone deletes that bubble) and mint a
+          // fresh stream_id for the continuation.
           const resetStreamForRewrite = (nextText: string) => {
             clearFlushTimer();
             streamBuffer = "";
             if (streamActive && lastText.length > 0) {
-              sendStreamEnd(ctx.account.groupId, streamId, lastText);
+              sendStreamEnd(ctx.account.groupId, streamId, lastText, { reset: true });
+              runtimeLogger.info("runtime.stream_reset", {
+                msg_id: message.messageId,
+                stream_id: streamId,
+                reason: "non-monotonic-partial",
+                abandoned_chars: lastText.length,
+              });
             }
             streamId = randomUUID();
             streamActive = false;
@@ -438,6 +448,22 @@ export const chat4000Plugin = {
             if (nextText) {
               queueStreamDelta(nextText);
             }
+          };
+
+          // Reset all per-stream state so the NEXT deliver(kind:"final") (which
+          // OpenClaw fires once per element of the agent's `replies` array —
+          // see openclaw `dispatch-from-config.ts:1499–1525`) starts a clean
+          // new stream_id with its own text_end. Without this, multiple
+          // replies in the array would all collide on the same stream_id and
+          // emit multiple text_end frames against it (Bug A).
+          const startNewStream = () => {
+            streamId = randomUUID();
+            streamActive = false;
+            lastText = "";
+            lastPartialText = "";
+            streamBuffer = "";
+            firstStreamChunkSent = false;
+            clearFlushTimer();
           };
 
           const queueStreamDelta = (text: string) => {
@@ -525,6 +551,10 @@ export const chat4000Plugin = {
                   }
                   finalizeStreamingState();
                   finalSent = true;
+                  // Bug A fix: rotate stream state so the NEXT element of the
+                  // agent's reply array (if any) gets a fresh stream_id with
+                  // its own text_end, instead of double-text_end-ing this one.
+                  startNewStream();
                   return;
                 }
 
@@ -534,6 +564,7 @@ export const chat4000Plugin = {
                   );
                   finalizeStreamingState();
                   finalSent = true;
+                  startNewStream();
                   return;
                 }
 
@@ -544,6 +575,7 @@ export const chat4000Plugin = {
                 });
                 finalizeStreamingState();
                 finalSent = true;
+                startNewStream();
               },
               onError: (error: unknown, info: { kind: string }) => {
                 runtimeLogger.info("runtime.ai_request_error", {

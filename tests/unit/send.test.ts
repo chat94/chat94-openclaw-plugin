@@ -58,7 +58,7 @@ describe("send", () => {
     expect(inner.body).toEqual({ text: "hello agent" });
     expect(inner.from).toMatchObject({
       role: "plugin",
-      app_version: "1.1.2",
+      app_version: "1.1.3",
       bundle_id: "@chat4000/openclaw-plugin",
     });
     expect(typeof inner.ts).toBe("number");
@@ -92,6 +92,24 @@ describe("send", () => {
       t: "text_end",
       id: "stream-1",
       body: { text: "full text" },
+    });
+    // Without { reset: true }, the body must NOT carry a reset flag — that
+    // signals normal finalization to the iPhone client.
+    expect((inner.body as Record<string, unknown>).reset).toBeUndefined();
+  });
+
+  it("sends stream end with reset:true and suppresses notify_if_offline (abandoned stream)", () => {
+    // Per protocol §6.4.2: when the agent rewrites mid-stream, we end the
+    // current stream_id with reset:true so the client deletes that bubble.
+    // Abandoned streams are not notification-worthy; APNs wake should NOT
+    // fire on them.
+    sendStreamEnd(groupId, "stream-rewrite", "Hello there, how", { reset: true });
+    expect(sentMessages[0]!.payload.notify_if_offline).toBeUndefined();
+    const inner = parseInnerMessage(sentMessages[0]!);
+    expect(inner).toMatchObject({
+      t: "text_end",
+      id: "stream-rewrite",
+      body: { text: "Hello there, how", reset: true },
     });
   });
 

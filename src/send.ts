@@ -134,12 +134,25 @@ export function sendStreamDelta(groupId: string, streamId: string, delta: string
   sendInnerMessage(groupId, "text_delta", { delta }, streamId);
 }
 
-export function sendStreamEnd(groupId: string, streamId: string, fullText: string): void {
-  // Final agent-reply frame for this stream — flag it so the relay wakes a
-  // backgrounded iOS app via APNs (§6.4 / §7). Streaming deltas and status
-  // updates remain notify_if_offline=false.
-  sendInnerMessage(groupId, "text_end", { text: fullText }, streamId, {
-    notifyIfOffline: true,
+export function sendStreamEnd(
+  groupId: string,
+  streamId: string,
+  fullText: string,
+  opts?: { reset?: boolean },
+): void {
+  // Per protocol §6.4.2:
+  //   - reset: false (or absent) — normal end-of-stream, finalize as
+  //     authoritative text. APNs-wake-worthy: notify_if_offline=true.
+  //   - reset: true — abandon this stream_id; the receiver should delete
+  //     the bubble for this stream. The agent will continue on a fresh
+  //     stream_id. Not notification-worthy on its own.
+  const reset = opts?.reset === true;
+  const body: Record<string, unknown> = { text: fullText };
+  if (reset) {
+    body.reset = true;
+  }
+  sendInnerMessage(groupId, "text_end", body, streamId, {
+    notifyIfOffline: !reset,
   });
 }
 
