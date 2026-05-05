@@ -49,10 +49,19 @@ export type RelayHelloPayload = {
   device_token: null;
   app_version: string;
   release_channel: string;
+  last_acked_seq?: number;
+};
+
+export type RelayVersionPolicy = {
+  min_version?: string | null;
+  recommended_version?: string | null;
+  latest_version?: string | null;
 };
 
 export type RelayHelloOkPayload = {
   current_terms_version?: number;
+  version_policy?: RelayVersionPolicy;
+  plugin_version_policy?: RelayVersionPolicy;
 };
 
 export type RelayMsgPayload = {
@@ -60,6 +69,21 @@ export type RelayMsgPayload = {
   nonce: string;
   ciphertext: string;
   notify_if_offline?: boolean;
+  /** Relay-assigned per-recipient sequence number. Absent on pre-ack relays. */
+  seq?: number;
+};
+
+export type RelayRecvAckPayload = {
+  /** Highest seq for which every lower seq has been persisted (cumulative high-water mark). */
+  up_to_seq: number;
+  /** Optional out-of-order persisted ranges above up_to_seq. Each pair [low, high] inclusive, low > up_to_seq. */
+  ranges?: [number, number][];
+};
+
+/** Sender-side hint emitted by ack-aware relays to confirm fan-out. Optional in v1. */
+export type RelayRecvSenderAckPayload = {
+  msg_id: string;
+  queued_for?: string[];
 };
 
 export type RelayPairOpenPayload = {
@@ -112,7 +136,16 @@ export type RelayPairCancelPayload = {
 
 // ─── Inner messages ─────────────────────────────────────────────────────────
 
-export type InnerMessageType = "text" | "image" | "audio" | "text_delta" | "text_end" | "status";
+export type InnerMessageType =
+  | "text"
+  | "image"
+  | "audio"
+  | "text_delta"
+  | "text_end"
+  | "status"
+  | "ack";
+
+export type InnerAckStage = "received" | "processing" | "displayed";
 
 export type InnerMessageFrom = {
   role: "app" | "plugin";
@@ -143,6 +176,10 @@ export type InnerAudioBody = {
 };
 export type InnerDeltaBody = { delta: string };
 export type InnerStatusBody = { status: "thinking" | "typing" | "idle" };
+export type InnerAckBody = {
+  refs: string;
+  stage: InnerAckStage;
+};
 
 // ─── Inbound (from iPhone) ──────────────────────────────────────────────────
 

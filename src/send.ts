@@ -5,6 +5,8 @@ import { resolveChat4000InstanceIdentity } from "./key-store.js";
 import { readPackageVersion } from "./package-info.js";
 import { RuntimeLogger } from "./runtime-logger.js";
 import type {
+  InnerAckBody,
+  InnerAckStage,
   InnerMessage,
   InnerMessageFrom,
   InnerMessageType,
@@ -142,4 +144,30 @@ export function sendStatus(groupId: string, status: "thinking" | "typing" | "idl
     msg_id: messageId,
     status,
   });
+}
+
+/**
+ * Emit a Flow B inner `ack` (§6.6.5) for an inbound app message.
+ *
+ * The ack rides through the same encrypted-envelope path as `text` so the
+ * relay cannot read or forge it. The originating app uses it to flip its
+ * outbound message UI from "sent" to "delivered".
+ *
+ * Idempotency is the caller's responsibility — the AckStore enforces
+ * "at most one inner ack per (refs, stage)" across redrives.
+ */
+export function sendInnerAck(
+  groupId: string,
+  refs: string,
+  stage: InnerAckStage = "received",
+): string {
+  const body: InnerAckBody = { refs, stage };
+  const messageId = sendInnerMessage(groupId, "ack", body as unknown as Record<string, unknown>);
+  activeSenders.get(groupId)?.runtimeLogger?.info("runtime.inner_ack_emit", {
+    type: "ack",
+    msg_id: messageId,
+    refs,
+    stage,
+  });
+  return messageId;
 }
