@@ -1,7 +1,5 @@
 import { stdout as output } from "node:process";
-import { spawn } from "node:child_process";
 import { resolveChat4000Account } from "./accounts.js";
-import { cleanupStaleAckStoreLock, resolveAckStorePath } from "./ack-store.js";
 import { generateGroupKey, generatePairingCode } from "./crypto.js";
 import { dumpChat4000Trace } from "./error-log.js";
 import { inspectChat4000StateAccess, saveStoredGroupKey } from "./key-store.js";
@@ -104,24 +102,6 @@ export function registerChat4000Cli(api: PluginApiLike): void {
           );
         });
 
-      chat4000
-        .command("upgrade")
-        .description(
-          "Upgrade the chat4000 plugin to the latest version on npm and clean up stale state",
-        )
-        .option(
-          "--version <v>",
-          'Specific version to install (default: "latest")',
-          "latest",
-        )
-        .option(
-          "--account <id>",
-          "Clean up stale state for this account before upgrade (default all)",
-        )
-        .action(async (opts: { version?: string; account?: string }) => {
-          await runUpgradeCommand(opts).catch(handleCliError);
-        });
-
       const sessions = chat4000
         .command("sessions")
         .description("Inspect and bind chat4000 to existing OpenClaw sessions");
@@ -220,72 +200,6 @@ export function registerChat4000Cli(api: PluginApiLike): void {
       ],
     },
   );
-}
-
-/**
- * `openclaw chat4000 upgrade` — wrap the upgrade flow in one command so users
- * never have to remember the `--force` flag, the lock-file workaround, or
- * the gateway-restart step.
- *
- * Steps:
- *   1. Clean up any stale `<account>.sqlite.lock` directories (in case a
- *      prior plugin version that lacked the in-process recovery left one
- *      behind). New 1.1.4+ stores self-recover on open, but doing it here
- *      too is harmless and guarantees the upgrade completes even if the
- *      old install has lock state from a -9 kill.
- *   2. Spawn `openclaw plugins install --force <pkg>@<version>` with stdio
- *      inherited so the user sees download/extract progress.
- *   3. Print the gateway-restart hint.
- *
- * We intentionally do NOT spawn `openclaw gateway restart` from inside the
- * plugin's CLI: the restart belongs to the user's process supervisor (systemd,
- * docker entrypoint, foreground terminal), and "restart from inside the
- * process you're about to replace" is a footgun.
- */
-async function runUpgradeCommand(opts: {
-  version?: string;
-  account?: string;
-}): Promise<void> {
-  const version = opts.version?.trim() || "latest";
-  const pkgSpec = `@chat4000/openclaw-plugin@${version}`;
-
-  // 1. Stale-lock cleanup. resolveAckStorePath returns one path per account
-  // id; without --account, do "default" since that's what 99% of installs use.
-  const accountId = opts.account?.trim() || "default";
-  const dbPath = resolveAckStorePath(accountId);
-  const removed = cleanupStaleAckStoreLock(dbPath);
-  if (removed) {
-    output.write(
-      `Cleaned up stale lock at ${dbPath}.lock (left behind by a prior process).\n`,
-    );
-  }
-
-  // 2. openclaw plugins install --force
-  output.write(`Installing ${pkgSpec}...\n`);
-  const exitCode: number = await new Promise((resolve, reject) => {
-    const child = spawn(
-      "openclaw",
-      ["plugins", "install", "--force", pkgSpec],
-      { stdio: "inherit" },
-    );
-    child.on("error", reject);
-    child.on("exit", (code) => resolve(code ?? 1));
-  });
-  if (exitCode !== 0) {
-    throw new Error(
-      `openclaw plugins install --force ${pkgSpec} exited with code ${exitCode}`,
-    );
-  }
-
-  // 3. Hint about restart.
-  output.write("\n");
-  output.write("Plugin upgraded. Restart the gateway to load the new code:\n");
-  output.write("  openclaw gateway restart\n");
-  output.write("\n");
-  output.write(
-    "If you're in a container without systemd, kill and restart manually:\n",
-  );
-  output.write("  pkill -9 -f openclaw && nohup openclaw gateway run > /tmp/gw.out 2>&1 & disown\n");
 }
 
 async function runInteractiveSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<void> {

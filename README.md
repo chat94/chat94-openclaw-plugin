@@ -41,7 +41,6 @@ openclaw plugin install $(pwd)
 ```sh
 openclaw chat4000 setup                    # first-time install + pair
 openclaw chat4000 pair                     # add another device
-openclaw chat4000 upgrade                  # upgrade to latest npm version + cleanup
 openclaw chat4000 status                   # connection + key info
 openclaw chat4000 sessions list            # OpenClaw sessions you can bind to
 openclaw chat4000 sessions current         # current binding
@@ -54,16 +53,23 @@ openclaw chat4000 --help                   # full flag list
 ### Upgrading
 
 ```sh
-openclaw chat4000 upgrade                  # latest from npm, with stale-state cleanup
-openclaw chat4000 upgrade --version 1.1.4  # pin a specific version
-openclaw gateway restart                   # then reload the gateway
+openclaw plugins install --force @chat4000/openclaw-plugin@latest
+openclaw gateway restart
 ```
 
-`upgrade` wraps `openclaw plugins install --force @chat4000/openclaw-plugin@<version>` and
-proactively removes any stale `<account>.sqlite.lock/` directory left behind by a
-previous gateway that was killed mid-write (kill -9, container restart, OOM). 1.1.4+
-stores self-recover on open, but the explicit cleanup makes upgrades from older
-versions seamless too.
+`--force` is required because OpenClaw refuses to overwrite an existing plugin without
+it. The gateway must be restarted to load the new code.
+
+If you're in a container without systemd, restart manually:
+
+```sh
+pkill -9 -f openclaw
+nohup openclaw gateway run > /tmp/gw.out 2>&1 & disown
+```
+
+Since 1.1.5, the ack store auto-recovers from any stale `<account>.sqlite.lock/`
+directory left by a previously-killed gateway, so kill-and-restart is safe and
+no manual cleanup is needed.
 
 Pair with verbose logs:
 ```sh
