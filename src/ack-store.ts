@@ -3,11 +3,10 @@
  *
  * Backed by `node-sqlite3-wasm` — pure WebAssembly SQLite with a Node-fs
  * VFS that translates SQLite's OS interface to `fs.openSync` / `readSync` /
- * `writeSync` / `fsyncSync`. This gives us full WAL durability on disk
- * (`<dbPath>` + `<dbPath>-wal` + `<dbPath>-shm`) without a native binary,
- * without any postinstall script, and without depending on Node version
- * features (works on Node ≥18 unchanged; survives OpenClaw's
- * `npm install --ignore-scripts` plugin install policy).
+ * `writeSync` / `fsyncSync`. This gives us full ACID durability on disk
+ * without a native binary, without any postinstall script, and without
+ * depending on Node version features (works on Node ≥18 unchanged; survives
+ * OpenClaw's `npm install --ignore-scripts` plugin install policy).
  *
  * Each account gets its own database at
  * `<openclaw-state>/plugins/chat4000/state/<accountId>.sqlite` so that
@@ -15,9 +14,10 @@
  *
  * Stored data:
  *   - `meta`: per `(group_id, role)` cumulative `last_acked_seq` for Flow A
- *     reconnect replay.
- *   - `messages`: idempotent application-layer log keyed by inner `msg_id`.
- *     Used to dedupe relay redrives (§6.6.9).
+ *     reconnect replay (§6.6.8).
+ *   - `processed_msg_ids`: idempotent application-layer dedup set keyed on
+ *     the **inner** `msg_id` (§6.6.9). The relay's outer `seq` may change
+ *     across redrives or relay sessions, but the inner.id is canonical.
  *   - `inner_acks`: enforces "at most one inner ack per (refs, stage)" so
  *     duplicate inbound msgs from a redrive don't double-emit Flow B acks.
  */
@@ -28,8 +28,8 @@ import { resolveOpenClawHome } from "./key-store.js";
 
 export type AckStoreRole = "plugin" | "app";
 
-export type RecordInboundResult = {
-  /** True when this msg_id was inserted; false when it was already present (duplicate redrive). */
+export type MarkProcessedResult = {
+  /** True when this inner msg_id was inserted; false when it was already present (duplicate redrive). */
   isNew: boolean;
 };
 
@@ -47,17 +47,12 @@ CREATE TABLE IF NOT EXISTS meta (
   PRIMARY KEY (group_id, role)
 );
 
-CREATE TABLE IF NOT EXISTS messages (
-  msg_id TEXT NOT NULL PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS processed_msg_ids (
   group_id TEXT NOT NULL,
-  seq INTEGER,
-  inner_t TEXT,
-  ts INTEGER,
-  persisted_at INTEGER NOT NULL
+  inner_msg_id TEXT NOT NULL,
+  persisted_at INTEGER NOT NULL,
+  PRIMARY KEY (group_id, inner_msg_id)
 );
-
-CREATE INDEX IF NOT EXISTS idx_messages_group_seq
-  ON messages(group_id, seq);
 
 CREATE TABLE IF NOT EXISTS inner_acks (
   group_id TEXT NOT NULL,
@@ -107,8 +102,6 @@ export function cleanupStaleAckStoreLock(dbPath: string): boolean {
     rmSync(lockDir, { recursive: true, force: true });
     return true;
   } catch {
-    // Best effort. If removal fails the next open will throw with the
-    // canonical "database is locked" error and the caller surfaces it.
     return false;
   }
 }
@@ -122,9 +115,9 @@ export class Chat4000AckStore {
 
   private readonly stmtUpsertWatermark: Statement;
 
-  private readonly stmtInsertMessage: Statement;
+  private readonly stmtMarkProcessed: Statement;
 
-  private readonly stmtHasMessage: Statement;
+  private readonly stmtIsProcessed: Statement;
 
   private readonly stmtInsertInnerAck: Statement;
 
@@ -153,7 +146,6 @@ export class Chat4000AckStore {
     this.db.exec("PRAGMA synchronous = FULL");
     this.db.exec(SCHEMA_SQL);
     try {
-      // Tighten file permissions; best-effort.
       const st = statSync(dbPath);
       if ((st.mode & 0o777) !== 0o600) {
         chmodSync(dbPath, 0o600);
@@ -172,12 +164,12 @@ export class Chat4000AckStore {
          last_acked_seq = MAX(meta.last_acked_seq, excluded.last_acked_seq),
          updated_at = excluded.updated_at`,
     );
-    this.stmtInsertMessage = this.db.prepare(
-      `INSERT OR IGNORE INTO messages (msg_id, group_id, seq, inner_t, ts, persisted_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+    this.stmtMarkProcessed = this.db.prepare(
+      `INSERT OR IGNORE INTO processed_msg_ids (group_id, inner_msg_id, persisted_at)
+       VALUES (?, ?, ?)`,
     );
-    this.stmtHasMessage = this.db.prepare(
-      "SELECT 1 FROM messages WHERE msg_id = ? LIMIT 1",
+    this.stmtIsProcessed = this.db.prepare(
+      "SELECT 1 FROM processed_msg_ids WHERE group_id = ? AND inner_msg_id = ? LIMIT 1",
     );
     this.stmtInsertInnerAck = this.db.prepare(
       `INSERT OR IGNORE INTO inner_acks (group_id, refs, stage, emitted_at)
@@ -187,9 +179,7 @@ export class Chat4000AckStore {
 
   /**
    * High-water mark to send on `hello.last_acked_seq` for the given recipient
-   * triple. Returns 0 when no successful ack has been persisted yet — which is
-   * a valid value: ack-aware relays will redrive the entire current queue,
-   * pre-ack relays will ignore the field.
+   * triple. Returns 0 when no successful ack has been persisted yet.
    */
   getLastAckedSeq(groupId: string, role: AckStoreRole = "plugin"): number {
     const row = this.stmtGetWatermark.get([groupId, role]) as
@@ -209,31 +199,21 @@ export class Chat4000AckStore {
   }
 
   /**
-   * Idempotent application-layer record of an inbound message. Returns
-   * `isNew=false` when the relay redrove a `msg_id` we have already
-   * processed — caller should still ack the (new) seq but must not
-   * re-dispatch the prompt.
+   * Idempotent application-layer record that an inner `msg_id` has been
+   * processed. Returns `isNew=false` when the relay has redriven a msg we
+   * have already handled — the caller must still recv_ack the new outer seq
+   * but must not re-dispatch the prompt and must not re-emit the inner ack.
+   *
+   * Per protocol §6.6.9 the dedup key is the inner msg_id, not the outer
+   * relay-assigned `seq` (which may differ across redrives).
    */
-  recordInboundMessage(params: {
-    msgId: string;
-    groupId: string;
-    seq?: number;
-    innerT?: string;
-    ts?: number;
-  }): RecordInboundResult {
-    const result = this.stmtInsertMessage.run([
-      params.msgId,
-      params.groupId,
-      params.seq ?? null,
-      params.innerT ?? null,
-      params.ts ?? null,
-      Date.now(),
-    ]);
+  markProcessed(groupId: string, innerMsgId: string): MarkProcessedResult {
+    const result = this.stmtMarkProcessed.run([groupId, innerMsgId, Date.now()]);
     return { isNew: Number(result.changes) === 1 };
   }
 
-  hasInboundMessage(msgId: string): boolean {
-    return this.stmtHasMessage.get([msgId]) != null;
+  isProcessed(groupId: string, innerMsgId: string): boolean {
+    return this.stmtIsProcessed.get([groupId, innerMsgId]) != null;
   }
 
   /**

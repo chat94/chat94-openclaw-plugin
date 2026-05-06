@@ -42,6 +42,7 @@ openclaw plugin install $(pwd)
 openclaw chat4000 setup                    # first-time install + pair
 openclaw chat4000 pair                     # add another device
 openclaw chat4000 status                   # connection + key info
+openclaw chat4000 reset                    # wipe local key + ack store (re-pair after)
 openclaw chat4000 sessions list            # OpenClaw sessions you can bind to
 openclaw chat4000 sessions current         # current binding
 openclaw chat4000 sessions bind ...        # link a chat4000 group to a session
@@ -67,7 +68,7 @@ pkill -9 -f openclaw
 nohup openclaw gateway run > /tmp/gw.out 2>&1 & disown
 ```
 
-Since 1.1.5, the ack store auto-recovers from any stale `<account>.sqlite.lock/`
+Since 1.1.5 the ack store auto-recovers from any stale `<account>.sqlite.lock/`
 directory left by a previously-killed gateway, so kill-and-restart is safe and
 no manual cleanup is needed.
 
@@ -78,14 +79,36 @@ openclaw chat4000 pair --pairing-log-level debug
 
 ---
 
-## 🆕 What's new in 1.1.0
+## 🆕 What's new in 1.4.0
 
-**Reliable delivery** — the plugin now implements protocol §6.6 acknowledgements end to end:
+**`openclaw chat4000 reset`** — destructive, no-confirm wipe of the per-account local state. Removes the group key file, the SQLite ack store (watermark + `processed_msg_ids` + `inner_acks`), and any orphaned `<db>.lock/` directory. After reset, `openclaw chat4000 setup` produces a fresh group key and re-pairs. Paired remote devices keep their old key — they need their own re-pair / app reinstall.
+
+## What's new in 1.3.0
+
+**Streaming wire format fix (§6.4.2).** Prior versions reused `inner.id` across every `text_delta` and `text_end` frame in one stream. Per §6.6.9 receivers dedupe by `inner.id`, so reused ids caused only the first frame to render — a production failure observed 2026-05-06. Each streaming frame now carries:
+
+- a **fresh** `inner.id` (UUID v4 per frame), which makes outer `msg_id` unique per frame
+- the stable stream correlator in **`body.stream_id`** (shared across all frames of one logical reply)
+
+Old senders sent `{ "t":"text_delta", "id":"<reused-stream-id>", "body":{"delta":"..."} }`. New senders send `{ "t":"text_delta", "id":"<fresh-uuid>", "body":{"delta":"...","stream_id":"<stable-uuid>"} }`. Wire `version` stays at `1`. New apps fall back to `inner.id` when `body.stream_id` is missing, so old plugin + new app still works; **new plugin requires app builds that read `body.stream_id`**.
+
+## What's new in 1.2.0
+
+**`MessageTransport` facade.** All wire-protocol concerns (WebSocket, encryption, the §6.6 ack flow, sequence numbers, app-layer keepalive, reconnect, dedup) are now hidden behind a single `MessageTransport` interface. The agent-runner / channel layer calls only `send`, observes `onReceive` / `onStatus` / `onConnectionState`, and never sees `seq`, never opens a socket. The default impl `RelayMessageTransport` is interchangeable with `MockMessageTransport` for tests.
+
+**Inner-id idempotency (§6.6.9).** Inbound dedup is now keyed on the **inner** `msg_id`, not the outer relay-assigned `seq`. The persistent `processed_msg_ids` table survives plugin restarts: if the relay redrives a message we've already handed to the agent, the plugin re-emits the inner `received` ack (so the iPhone tick stays correct) and skips re-dispatching the prompt.
+
+**`StreamDispatcher` extraction.** The §6.4.2 streaming invariants — one `text_end` per `stream_id`, fresh `stream_id` after every `deliver(final)`, `text_end{reset:true}` on non-monotonic partial — live in a single class with direct unit tests. Pins the two production failure modes from 2026-05-05 (double-`text_end` and backwards-content `text_delta`).
+
+**No protocol change.** Wire format is still `version: 1`. This release is a code-organization refactor; pre-ack relays, ack-aware relays, and existing iPhone clients all continue to work unchanged.
+
+## What's new in 1.1.0
+
+**Reliable delivery** — the plugin implements protocol §6.6 acknowledgements end to end:
 
 - **Flow A (`recv_ack`)** — outer plaintext ack the relay uses to evict per-recipient queue entries. Cumulative `up_to_seq` plus optional out-of-order `ranges`. Flushed on 32 pending seqs, 50 ms idle, or clean shutdown.
 - **Flow B (inner `t: "ack"`)** — encrypted end-to-end receipt the originating app uses to flip its outbound message UI from "sent" to "delivered". Emitted as soon as the plugin decrypts and parses an inbound app `text`/`image`/`audio` — no waiting for the agent to start replying.
 - **Reconnect replay** — `hello.last_acked_seq` is read from a per-account SQLite store on every reconnect; the relay redrives only what we haven't durably acked.
-- **Redrive dedupe** — duplicate inner `msg_id` values are recognized across reconnects and not re-dispatched to the agent.
 - **App-layer keepalive** — outer `ping` every 25 s of write-idle, distinct from the WebSocket frame keepalive; reconnect on missed `pong`.
 
 Pre-ack relays continue to work unchanged — no `recv_ack` is emitted, no inner `ack` is emitted, no behavior regression.
@@ -127,7 +150,7 @@ Privacy policy: <https://chat4000.com/privacy>
 | `~/.openclaw/plugins/chat4000/keys/<account>.json` | Group key (paired identity), `0600` |
 | `~/.openclaw/plugins/chat4000/instance.json` | Per-device id + display name |
 | `~/.openclaw/plugins/chat4000/session-bindings.json` | chat4000 group ↔ OpenClaw session links |
-| `~/.openclaw/plugins/chat4000/state/<account>.sqlite` | Reliable-delivery ack watermark + msg_id dedupe (since 1.1.0), `0600` |
+| `~/.openclaw/plugins/chat4000/state/<account>.sqlite` | Ack watermark + inner-id dedupe (since 1.1.0; rekeyed to inner.id in 1.2.0), `0600` |
 | `~/.openclaw/plugins/chat4000/logs/runtime.log` | Connection & relay events |
 | `~/.openclaw/plugins/chat4000/logs/pairing.log` | Pairing protocol trace |
 | `~/.openclaw/plugins/chat4000/logs/errors.log` | Uncaught errors + stack traces |
@@ -149,18 +172,22 @@ Default relay endpoint (hard-coded, not configurable):
 ```text
 chat4000-openclaw-plugin/
 ├── src/
-│   ├── channel.ts              OpenClaw channel surface
+│   ├── channel.ts              OpenClaw channel surface (config, gateway, outbound)
+│   ├── stream-dispatcher.ts    §6.4.2 streaming invariants (text_delta / text_end / reset)
+│   ├── transport/
+│   │   ├── index.ts            MessageTransport interface + types
+│   │   ├── relay.ts            RelayMessageTransport (default impl)
+│   │   ├── mock.ts             MockMessageTransport (tests)
+│   │   └── registry.ts         per-account transport registry
 │   ├── crypto.ts               XChaCha20-Poly1305 + X25519 pairing
 │   ├── pairing.ts              joiner + initiator pairing flows
-│   ├── monitor.ts              relay monitor with reconnect + ack wiring
-│   ├── send.ts                 outbound transport (incl. inner ack)
-│   ├── ack-store.ts            SQLite watermark + msg_id dedupe (Flow A/B state)
+│   ├── ack-store.ts            SQLite watermark + processed_msg_ids dedup (§6.6 state)
 │   ├── recv-ack-batcher.ts     cumulative recv_ack emission (Flow A)
 │   ├── session-binding.ts      group ↔ session mapping
 │   ├── cli.ts                  openclaw chat4000 ... commands
 │   └── telemetry.ts            Sentry init + PII scrubbing
 ├── tests/
-│   ├── unit/                   77 unit tests
+│   ├── unit/                   125+ unit tests
 │   └── contract/               relay protocol contract tests
 ├── docker/                     dev compose stack (gateway + relay)
 ├── scripts/

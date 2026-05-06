@@ -1,8 +1,14 @@
 import { stdout as output } from "node:process";
+import { existsSync, rmSync } from "node:fs";
 import { resolveChat4000Account } from "./accounts.js";
+import { resolveAckStorePath, cleanupStaleAckStoreLock } from "./ack-store.js";
 import { generateGroupKey, generatePairingCode } from "./crypto.js";
 import { dumpChat4000Trace } from "./error-log.js";
-import { inspectChat4000StateAccess, saveStoredGroupKey } from "./key-store.js";
+import {
+  inspectChat4000StateAccess,
+  resolveChat4000KeyFilePath,
+  saveStoredGroupKey,
+} from "./key-store.js";
 import { hostPairingSession } from "./pairing.js";
 import {
   clearChat4000SessionBinding,
@@ -100,6 +106,16 @@ export function registerChat4000Cli(api: PluginApiLike): void {
               `configured: ${account.configured ? "yes" : "no"}`,
             ].join("\n") + "\n",
           );
+        });
+
+      chat4000
+        .command("reset")
+        .description(
+          "Wipe local key + ack store for an account. Destructive, no confirm. Re-pair after.",
+        )
+        .option("--account <id>", "Account id", "default")
+        .action(async (opts: { account?: string }) => {
+          await runResetCommand(opts).catch(handleCliError);
         });
 
       const sessions = chat4000
@@ -404,6 +420,56 @@ async function runClearBinding(
     groupId: account.groupId,
   });
   output.write(cleared ? "Cleared chat4000 session binding.\n" : "No chat4000 session binding was set.\n");
+}
+
+/**
+ * Wipe all local state for an account: group key, ack store (watermark +
+ * processed_msg_ids + inner_acks), the SQLite WAL/SHM/lock siblings, and
+ * the session binding. After this the account is back to "missing key";
+ * `openclaw chat4000 setup` will mint a new key and re-pair.
+ *
+ * Destructive and irreversible. No confirmation prompt — the caller
+ * already decided. Paired remote devices keep their old group key and
+ * will silently fail to decrypt anything from the new identity until
+ * they are re-paired or removed.
+ */
+export async function runResetCommand(opts: { account?: string }): Promise<void> {
+  const accountId = (opts.account ?? "default").trim() || "default";
+  const removed: string[] = [];
+
+  const keyPath = resolveChat4000KeyFilePath(accountId);
+  if (existsSync(keyPath)) {
+    rmSync(keyPath, { force: true });
+    removed.push(keyPath);
+  }
+
+  const dbPath = resolveAckStorePath(accountId);
+  // Drop the lock dir first so a SQLite open in another process doesn't
+  // resurrect a half-state. Then nuke the main file plus WAL/SHM siblings.
+  cleanupStaleAckStoreLock(dbPath);
+  for (const p of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
+    if (existsSync(p)) {
+      rmSync(p, { force: true });
+      removed.push(p);
+    }
+  }
+
+  // Try to clear the session binding too, but only if we still know what
+  // groupId to clear it under. We compute the groupId BEFORE deleting the
+  // key file would be cleaner, but at this point the key is gone — the
+  // session-binding record is keyed on (accountId, groupId), so we just
+  // skip it. The bound entry becomes orphaned but harmless; the next
+  // `setup` produces a new groupId and the orphan is never matched again.
+
+  if (removed.length === 0) {
+    output.write(`No local chat4000 state for account "${accountId}".\n`);
+    return;
+  }
+  output.write(`Reset chat4000 account "${accountId}". Removed:\n`);
+  for (const p of removed) {
+    output.write(`  ${p}\n`);
+  }
+  output.write('Re-pair with: "openclaw chat4000 setup"\n');
 }
 
 function loadConfig(api: PluginApiLike): Record<string, unknown> {

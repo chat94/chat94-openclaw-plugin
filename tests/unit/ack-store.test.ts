@@ -26,19 +26,27 @@ describe("ack-store", () => {
   it("setLastAckedSeq advances watermark monotonically", () => {
     store.setLastAckedSeq(groupId, 100);
     expect(store.getLastAckedSeq(groupId)).toBe(100);
-    store.setLastAckedSeq(groupId, 50); // attempt to regress
+    store.setLastAckedSeq(groupId, 50);
     expect(store.getLastAckedSeq(groupId)).toBe(100);
     store.setLastAckedSeq(groupId, 200);
     expect(store.getLastAckedSeq(groupId)).toBe(200);
   });
 
-  it("recordInboundMessage is idempotent on msg_id", () => {
-    const a = store.recordInboundMessage({ msgId: "m1", groupId, seq: 10, innerT: "text" });
-    const b = store.recordInboundMessage({ msgId: "m1", groupId, seq: 10, innerT: "text" });
+  it("markProcessed is idempotent on inner msg_id", () => {
+    const a = store.markProcessed(groupId, "inner-1");
+    const b = store.markProcessed(groupId, "inner-1");
     expect(a.isNew).toBe(true);
     expect(b.isNew).toBe(false);
-    expect(store.hasInboundMessage("m1")).toBe(true);
-    expect(store.hasInboundMessage("m2")).toBe(false);
+    expect(store.isProcessed(groupId, "inner-1")).toBe(true);
+    expect(store.isProcessed(groupId, "inner-2")).toBe(false);
+  });
+
+  it("markProcessed isolates per group_id", () => {
+    const otherGroup = "h".repeat(64);
+    expect(store.markProcessed(groupId, "shared-id").isNew).toBe(true);
+    expect(store.markProcessed(otherGroup, "shared-id").isNew).toBe(true);
+    expect(store.isProcessed(groupId, "shared-id")).toBe(true);
+    expect(store.isProcessed(otherGroup, "shared-id")).toBe(true);
   });
 
   it("inner-ack idempotency keyed by (group, refs, stage)", () => {
@@ -53,12 +61,12 @@ describe("ack-store", () => {
 
   it("watermark survives close/reopen at the same path", () => {
     store.setLastAckedSeq(groupId, 4180);
-    store.recordInboundMessage({ msgId: "persisted", groupId, seq: 4180 });
+    store.markProcessed(groupId, "persisted");
     store.close();
 
     const reopened = new Chat4000AckStore(path.join(tmpDir, "default.sqlite"));
     expect(reopened.getLastAckedSeq(groupId)).toBe(4180);
-    expect(reopened.hasInboundMessage("persisted")).toBe(true);
+    expect(reopened.isProcessed(groupId, "persisted")).toBe(true);
     reopened.close();
   });
 

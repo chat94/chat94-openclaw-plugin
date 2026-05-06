@@ -47,8 +47,8 @@ describe("Chat4000AckStore — durability across reopen", () => {
     const store = new Chat4000AckStore(dbPath);
     store.setLastAckedSeq(groupA, 100);
     store.setLastAckedSeq(groupA, 250);
-    store.setLastAckedSeq(groupA, 50); // regression attempt
-    store.setLastAckedSeq(groupA, 0); // zero attempt
+    store.setLastAckedSeq(groupA, 50);
+    store.setLastAckedSeq(groupA, 0);
     expect(store.getLastAckedSeq(groupA)).toBe(250);
     store.close();
   });
@@ -74,21 +74,20 @@ describe("Chat4000AckStore — durability across reopen", () => {
     expect(store.getLastAckedSeq(groupA, "plugin")).toBe(100);
     expect(store.getLastAckedSeq(groupA, "app")).toBe(50);
     expect(store.getLastAckedSeq(groupB, "plugin")).toBe(999);
-    expect(store.getLastAckedSeq(groupB, "app")).toBe(0); // never set
+    expect(store.getLastAckedSeq(groupB, "app")).toBe(0);
     store.close();
   });
 
-  it("recordInboundMessage idempotency survives reopen", () => {
+  it("markProcessed idempotency survives reopen", () => {
     let store = new Chat4000AckStore(dbPath);
-    expect(store.recordInboundMessage({ msgId: "m1", groupId: groupA, seq: 1 }).isNew).toBe(true);
-    expect(store.recordInboundMessage({ msgId: "m1", groupId: groupA, seq: 1 }).isNew).toBe(false);
+    expect(store.markProcessed(groupA, "inner-1").isNew).toBe(true);
+    expect(store.markProcessed(groupA, "inner-1").isNew).toBe(false);
     store.close();
 
     store = new Chat4000AckStore(dbPath);
-    // After reopen, m1 is still recognized as a duplicate redrive.
-    expect(store.recordInboundMessage({ msgId: "m1", groupId: groupA, seq: 1 }).isNew).toBe(false);
-    expect(store.hasInboundMessage("m1")).toBe(true);
-    expect(store.hasInboundMessage("m2")).toBe(false);
+    expect(store.markProcessed(groupA, "inner-1").isNew).toBe(false);
+    expect(store.isProcessed(groupA, "inner-1")).toBe(true);
+    expect(store.isProcessed(groupA, "inner-2")).toBe(false);
     store.close();
   });
 
@@ -100,9 +99,7 @@ describe("Chat4000AckStore — durability across reopen", () => {
 
     store = new Chat4000AckStore(dbPath);
     expect(store.markInnerAckEmitted({ groupId: groupA, refs: "x", stage: "received" }).isNew).toBe(false);
-    // Different stage on the same refs is a different ack — must still be allowed.
     expect(store.markInnerAckEmitted({ groupId: groupA, refs: "x", stage: "processing" }).isNew).toBe(true);
-    // Different group entirely.
     expect(store.markInnerAckEmitted({ groupId: groupB, refs: "x", stage: "received" }).isNew).toBe(true);
     store.close();
   });
@@ -111,27 +108,13 @@ describe("Chat4000AckStore — durability across reopen", () => {
     const store = new Chat4000AckStore(dbPath);
     store.setLastAckedSeq(groupA, 1);
     expect(existsSync(dbPath)).toBe(true);
-    // Even under DELETE journal mode (the active mode under node-sqlite3-wasm —
-    // see wa-sqlite-integration.test.ts), the main DB file must be on disk.
     store.close();
   });
 
-  it("recording 500 distinct msg_ids preserves all of them across reopen", () => {
-    // 500 rather than 5000 because synchronous=FULL + DELETE journal mode
-    // means every auto-commit fsyncs — at this size we already exercise
-    // the durability path without slowing the suite. The library does not
-    // expose a transaction wrapper through Chat4000AckStore by design;
-    // the ack hot path is one-row-at-a-time and we want to test it as it
-    // runs in production.
+  it("recording 500 distinct inner msg_ids preserves all of them across reopen", () => {
     let store = new Chat4000AckStore(dbPath);
     for (let i = 0; i < 500; i++) {
-      const r = store.recordInboundMessage({
-        msgId: `bulk-${i}`,
-        groupId: groupA,
-        seq: i + 1,
-        innerT: "text",
-        ts: Date.now(),
-      });
+      const r = store.markProcessed(groupA, `bulk-${i}`);
       expect(r.isNew).toBe(true);
     }
     store.setLastAckedSeq(groupA, 500);
@@ -139,23 +122,20 @@ describe("Chat4000AckStore — durability across reopen", () => {
 
     store = new Chat4000AckStore(dbPath);
     expect(store.getLastAckedSeq(groupA)).toBe(500);
-    expect(store.hasInboundMessage("bulk-0")).toBe(true);
-    expect(store.hasInboundMessage("bulk-250")).toBe(true);
-    expect(store.hasInboundMessage("bulk-499")).toBe(true);
-    expect(store.hasInboundMessage("bulk-99999")).toBe(false);
+    expect(store.isProcessed(groupA, "bulk-0")).toBe(true);
+    expect(store.isProcessed(groupA, "bulk-250")).toBe(true);
+    expect(store.isProcessed(groupA, "bulk-499")).toBe(true);
+    expect(store.isProcessed(groupA, "bulk-99999")).toBe(false);
     store.close();
   });
 
   it("interleaved writes from a single store instance are atomic w.r.t. each other", () => {
-    // No real race possible because the store is synchronous, but we lock in
-    // the ordering invariant: every recordInboundMessage that returns isNew
-    // is observable by a subsequent hasInboundMessage call.
     const store = new Chat4000AckStore(dbPath);
     for (let i = 0; i < 100; i++) {
       const id = `seq-${i}`;
-      expect(store.recordInboundMessage({ msgId: id, groupId: groupA, seq: i + 1 }).isNew).toBe(true);
-      expect(store.hasInboundMessage(id)).toBe(true);
-      expect(store.recordInboundMessage({ msgId: id, groupId: groupA, seq: i + 1 }).isNew).toBe(false);
+      expect(store.markProcessed(groupA, id).isNew).toBe(true);
+      expect(store.isProcessed(groupA, id)).toBe(true);
+      expect(store.markProcessed(groupA, id).isNew).toBe(false);
     }
     store.close();
   });
@@ -175,9 +155,8 @@ describe("Chat4000AckStore — durability across reopen", () => {
 
   it("opening a fresh path creates the schema with all three tables", () => {
     const store = new Chat4000AckStore(dbPath);
-    // Touch all three tables — if any DDL is missing the calls would throw.
     expect(() => store.getLastAckedSeq(groupA)).not.toThrow();
-    expect(() => store.recordInboundMessage({ msgId: "z", groupId: groupA, seq: 1 })).not.toThrow();
+    expect(() => store.markProcessed(groupA, "z")).not.toThrow();
     expect(() => store.markInnerAckEmitted({ groupId: groupA, refs: "z", stage: "received" })).not.toThrow();
     store.close();
   });
@@ -186,16 +165,14 @@ describe("Chat4000AckStore — durability across reopen", () => {
     {
       const a = new Chat4000AckStore(dbPath);
       a.setLastAckedSeq(groupA, 10);
-      a.recordInboundMessage({ msgId: "old", groupId: groupA, seq: 10 });
+      a.markProcessed(groupA, "old");
       a.markInnerAckEmitted({ groupId: groupA, refs: "old", stage: "received" });
       a.close();
     }
     {
       const b = new Chat4000AckStore(dbPath);
-      // CREATE TABLE IF NOT EXISTS should be a no-op on existing schema —
-      // these calls must not throw and must see the previously written rows.
       expect(b.getLastAckedSeq(groupA)).toBe(10);
-      expect(b.hasInboundMessage("old")).toBe(true);
+      expect(b.isProcessed(groupA, "old")).toBe(true);
       expect(
         b.markInnerAckEmitted({ groupId: groupA, refs: "old", stage: "received" }).isNew,
       ).toBe(false);
@@ -219,28 +196,21 @@ describe("Chat4000AckStore — stale lock recovery (1.1.4 fix)", () => {
   });
 
   it("constructor removes a stale lock dir left by a prior killed process", () => {
-    // Simulate the failure mode: a previous gateway acquired the lock
-    // (mkdir <db>.lock) and got killed before it could rmdir it.
     {
       const first = new Chat4000AckStore(dbPath);
       first.setLastAckedSeq(groupA, 7);
       first.close();
     }
-    // Manually create the orphaned lock dir.
     const lockDir = `${dbPath}.lock`;
     mkdirSync(lockDir);
     expect(existsSync(lockDir)).toBe(true);
 
-    // Open a new store. Without the recovery, this would throw "database
-    // is locked". With the recovery, the lock is silently removed and
-    // the open succeeds.
     const second = new Chat4000AckStore(dbPath);
     expect(second.getLastAckedSeq(groupA)).toBe(7);
     second.close();
   });
 
   it("constructor cleans up a stale lock dir even if it contains files", () => {
-    // The library doesn't put files inside the lock dir today, but be defensive.
     {
       const first = new Chat4000AckStore(dbPath);
       first.close();
@@ -257,15 +227,14 @@ describe("Chat4000AckStore — stale lock recovery (1.1.4 fix)", () => {
   });
 
   it("cleanupStaleAckStoreLock(path) returns true when a lock was removed, false when none existed", () => {
-    expect(cleanupStaleAckStoreLock(dbPath)).toBe(false); // nothing to clean
+    expect(cleanupStaleAckStoreLock(dbPath)).toBe(false);
     mkdirSync(`${dbPath}.lock`);
-    expect(cleanupStaleAckStoreLock(dbPath)).toBe(true); // removed
+    expect(cleanupStaleAckStoreLock(dbPath)).toBe(true);
     expect(existsSync(`${dbPath}.lock`)).toBe(false);
-    expect(cleanupStaleAckStoreLock(dbPath)).toBe(false); // already gone
+    expect(cleanupStaleAckStoreLock(dbPath)).toBe(false);
   });
 
   it("with _skipStaleLockCleanup=true, an existing lock dir blocks the open (control test)", () => {
-    // This proves the cleanup is what's enabling recovery in the test above.
     {
       const first = new Chat4000AckStore(dbPath);
       first.close();
@@ -289,49 +258,44 @@ describe("Chat4000AckStore — relay-redrive simulation", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("simulates: process processes seqs 1..10, ack 1..10, restart, relay redrives 6..15", () => {
+  it("simulates: process processes inner ids 1..10, ack 1..10, restart, relay redrives 6..15", () => {
     let store = new Chat4000AckStore(dbPath);
     for (let i = 1; i <= 10; i++) {
-      store.recordInboundMessage({ msgId: `m${i}`, groupId: group, seq: i });
-      store.markInnerAckEmitted({ groupId: group, refs: `m${i}`, stage: "received" });
+      store.markProcessed(group, `inner-${i}`);
+      store.markInnerAckEmitted({ groupId: group, refs: `inner-${i}`, stage: "received" });
     }
     store.setLastAckedSeq(group, 10);
     store.close();
 
-    // "Process restart" — fresh handle, same path.
     store = new Chat4000AckStore(dbPath);
     expect(store.getLastAckedSeq(group)).toBe(10);
 
-    // Relay redrives 6..10 (already processed) plus 11..15 (new).
     const redrived: number[] = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
     const newlyProcessed: number[] = [];
-    for (const seq of redrived) {
-      const r = store.recordInboundMessage({ msgId: `m${seq}`, groupId: group, seq });
+    for (const i of redrived) {
+      const r = store.markProcessed(group, `inner-${i}`);
       if (r.isNew) {
-        newlyProcessed.push(seq);
-        // Inner ack on the new seq must succeed for the first time.
-        expect(store.markInnerAckEmitted({ groupId: group, refs: `m${seq}`, stage: "received" }).isNew).toBe(true);
+        newlyProcessed.push(i);
+        expect(store.markInnerAckEmitted({ groupId: group, refs: `inner-${i}`, stage: "received" }).isNew).toBe(true);
       } else {
-        // Redrive of already-processed message — must NOT re-emit inner ack.
-        expect(store.markInnerAckEmitted({ groupId: group, refs: `m${seq}`, stage: "received" }).isNew).toBe(false);
+        expect(store.markInnerAckEmitted({ groupId: group, refs: `inner-${i}`, stage: "received" }).isNew).toBe(false);
       }
     }
     expect(newlyProcessed).toEqual([11, 12, 13, 14, 15]);
     store.close();
   });
 
-  it("simulates: relay re-assigns higher seq for redrive (msg_id stays same)", () => {
-    // The protocol allows the relay to assign a new per-recipient seq on
-    // redrive. The plugin must dedupe by inner msg_id, not by seq.
+  it("simulates: relay re-assigns higher seq for redrive (inner.id stays same → still dedup'd)", () => {
+    // Per protocol §6.6.9 dedup is on inner.id, NOT on outer seq. The outer
+    // seq can change across relay sessions; inner.id is canonical.
     let store = new Chat4000AckStore(dbPath);
-    expect(store.recordInboundMessage({ msgId: "stable-id", groupId: group, seq: 5 }).isNew).toBe(true);
+    expect(store.markProcessed(group, "stable-inner-id").isNew).toBe(true);
     store.setLastAckedSeq(group, 5);
     store.close();
 
     store = new Chat4000AckStore(dbPath);
-    // Same msg_id, different (higher) seq from a different relay session.
-    expect(store.recordInboundMessage({ msgId: "stable-id", groupId: group, seq: 17 }).isNew).toBe(false);
-    // The watermark of 5 from the previous session is still in effect.
+    // Same inner.id, different (higher) outer seq from a different relay session.
+    expect(store.markProcessed(group, "stable-inner-id").isNew).toBe(false);
     expect(store.getLastAckedSeq(group)).toBe(5);
     store.close();
   });

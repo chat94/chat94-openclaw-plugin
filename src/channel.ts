@@ -1,11 +1,15 @@
 /**
  * chat4000 Channel Plugin for OpenClaw.
  *
- * This plugin connects to a chat4000 relay server via WebSocket,
- * routing E2E encrypted messages between the OpenClaw agent and
- * chat4000 iOS/macOS apps.
+ * Routes messages between an OpenClaw agent and chat4000 iOS/macOS apps via
+ * an end-to-end encrypted relay.
  *
- * Pattern follows IRC and Mattermost plugins.
+ * The plugin is split along a `MessageTransport` seam:
+ *   - `RelayMessageTransport` owns the wire (WS, encryption, §6.6 ack flow,
+ *     §6.5 keepalive, reconnect, dedup by inner.id).
+ *   - This file owns OpenClaw glue: agent dispatch, session binding,
+ *     session-relative timestamps, media materialization, and (via
+ *     `StreamDispatcher`) the §6.4.2 streaming invariants.
  */
 
 import {
@@ -15,15 +19,23 @@ import {
   getDefaultChat4000AccountId,
 } from "./accounts.js";
 import { getChat4000SessionBinding } from "./session-binding.js";
-import type { ResolvedChat4000Account, Chat4000Probe } from "./types.js";
+import type { ResolvedChat4000Account } from "./types.js";
 import { RuntimeLogger } from "./runtime-logger.js";
-import { randomUUID } from "node:crypto";
+import { StreamDispatcher } from "./stream-dispatcher.js";
+import {
+  registerTransport,
+  unregisterTransport,
+  getTransport,
+} from "./transport/registry.js";
+import type {
+  ConnectionState,
+  InnerAudioBody,
+  InnerImageBody,
+  InnerMessage,
+  InnerTextBody,
+  MessageTransport,
+} from "./transport/index.js";
 
-const STREAM_FLUSH_MIN_CHARS = 200;
-const STREAM_FLUSH_DELAY_MS = 100;
-
-// Lazy-load runtime to avoid pulling in WebSocket/crypto on import
-let channelRuntimePromise: Promise<typeof import("./channel-runtime.js")> | undefined;
 let mediaRuntimePromise:
   | Promise<{
       saveMediaBuffer: (
@@ -43,6 +55,7 @@ let mediaRuntimePromise:
       };
     }>
   | undefined;
+
 let replyPipelinePromise:
   | Promise<{
       createChannelReplyPipeline: (params: {
@@ -60,9 +73,13 @@ let replyPipelinePromise:
     }>
   | undefined;
 
-async function loadChannelRuntime() {
-  channelRuntimePromise ??= import("./channel-runtime.js");
-  return await channelRuntimePromise;
+let transportRuntimePromise:
+  | Promise<typeof import("./transport/relay.js")>
+  | undefined;
+
+async function loadTransportRuntime() {
+  transportRuntimePromise ??= import("./transport/relay.js");
+  return await transportRuntimePromise;
 }
 
 async function loadReplyPipelineRuntime() {
@@ -81,8 +98,6 @@ async function loadMediaRuntime() {
 }
 
 // ─── Channel plugin definition ──────────────────────────────────────────────
-// This would use createChatChannelPlugin() from openclaw/plugin-sdk/channel-core
-// but since we're building standalone for now, we export the raw structure.
 
 export const chat4000Plugin = {
   id: "chat4000" as const,
@@ -100,7 +115,7 @@ export const chat4000Plugin = {
       edit: true,
       unsend: true,
       reply: true,
-      effects: true, // typing indicators
+      effects: true,
       blockStreaming: false,
     },
     reload: {
@@ -151,7 +166,7 @@ export const chat4000Plugin = {
     }),
   },
 
-  // ─── Gateway (WebSocket connection to relay) ────────────────────────────
+  // ─── Gateway (transport lifecycle + agent dispatch) ─────────────────────
 
   gateway: {
     startAccount: async (ctx: {
@@ -171,7 +186,7 @@ export const chat4000Plugin = {
       if (!ctx.account.configured) {
         throw new Error(
           `chat4000 not configured for account "${ctx.account.accountId}". ` +
-          `Run "openclaw chat4000 setup" to create the local key and finish setup.`
+          `Run "openclaw chat4000 setup" to create the local key and finish setup.`,
         );
       }
 
@@ -181,475 +196,84 @@ export const chat4000Plugin = {
         groupId: ctx.account.groupId,
       });
 
-      const {
-        monitorChat4000Provider,
-        registerSender,
-        unregisterSender,
-      } = await loadChannelRuntime();
+      const { RelayMessageTransport } = await loadTransportRuntime();
+      const transport = new RelayMessageTransport({ abortSignal: ctx.abortSignal });
+      registerTransport(ctx.account.accountId, transport);
 
-      await monitorChat4000Provider({
-        accountId: ctx.account.accountId,
-        config: ctx.cfg,
-        abortSignal: ctx.abortSignal,
-        onConnected: (send) => {
-          registerSender(ctx.account, send);
-          ctx.setStatus({
-            accountId: ctx.account.accountId,
-            name: `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`,
-            enabled: true,
-            configured: true,
-            extra: { connected: true },
-          });
-        },
-        onDisconnected: () => {
-          unregisterSender(ctx.account.groupId);
-          ctx.setStatus({
-            accountId: ctx.account.accountId,
-            name: `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`,
-            enabled: true,
-            configured: true,
-            extra: { connected: false },
-          });
-        },
-        onMessage: async (message) => {
-          if (!ctx.channelRuntime) {
-            runtimeLogger.info("runtime.ai_request_error", {
-              msg_id: message.messageId,
-              error: "channelRuntime missing",
-            });
-            ctx.log?.warn?.(
-              `[${ctx.account.accountId}] runtime.dispatch unavailable: channelRuntime missing`,
-            );
-            return;
+      const setConnected = (connected: boolean) =>
+        ctx.setStatus({
+          accountId: ctx.account.accountId,
+          name: `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`,
+          enabled: true,
+          configured: true,
+          extra: { connected },
+        });
+
+      transport.onConnectionState((state: ConnectionState) => {
+        if (state === "connected") {
+          ctx.log?.info?.(`[${ctx.account.accountId}] Connected to relay`);
+          setConnected(true);
+        } else if (state === "disconnected" || state === "reconnecting") {
+          if (state === "reconnecting") {
+            ctx.log?.info?.(`[${ctx.account.accountId}] Reconnecting...`);
+          } else {
+            ctx.log?.info?.(`[${ctx.account.accountId}] Disconnected from relay`);
           }
-
-          const senderAddress = `chat4000:${ctx.account.groupId}`;
-          const recipientAddress = "chat4000:agent";
-          const conversationLabel = `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`;
-          const runtime = ctx.channelRuntime as {
-            routing: {
-              resolveAgentRoute: (params: {
-                cfg: unknown;
-                channel: string;
-                accountId: string;
-                peer: { kind: "direct"; id: string };
-              }) => { agentId: string; sessionKey: string; accountId?: string };
-            };
-            session: {
-              resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
-              readSessionUpdatedAt?: (params: { storePath: string; sessionKey: string }) => number | undefined;
-              recordInboundSession: (params: {
-                storePath: string;
-                sessionKey: string;
-                ctx: Record<string, unknown>;
-                onRecordError: (err: unknown) => void;
-              }) => Promise<void>;
-            };
-            reply: {
-              resolveEnvelopeFormatOptions: (cfg: unknown) => unknown;
-              formatAgentEnvelope: (params: {
-                channel: string;
-                from: string;
-                body: string;
-                timestamp?: number;
-                previousTimestamp?: number;
-                envelope: unknown;
-              }) => string;
-              finalizeInboundContext: (ctx: Record<string, unknown>) => Record<string, unknown>;
-              dispatchReplyWithBufferedBlockDispatcher: (params: {
-                ctx: Record<string, unknown>;
-                cfg: unknown;
-                dispatcherOptions: Record<string, unknown>;
-                replyOptions?: Record<string, unknown>;
-              }) => Promise<unknown>;
-            };
-          };
-          const route = runtime.routing.resolveAgentRoute({
-            cfg: ctx.cfg,
-            channel: "chat4000",
-            accountId: ctx.account.accountId,
-            peer: { kind: "direct", id: ctx.account.groupId },
-          });
-          const boundSession = getChat4000SessionBinding({
-            accountId: ctx.account.accountId,
-            groupId: ctx.account.groupId,
-          });
-          const targetSessionKey = boundSession?.targetSessionKey ?? route.sessionKey;
-          const targetAgentId = boundSession?.agentId ?? route.agentId;
-          const storePath =
-            boundSession?.storePath ??
-            runtime.session.resolveStorePath(
-              (ctx.cfg as { session?: { store?: string } }).session?.store,
-              { agentId: targetAgentId },
-            );
-          if (boundSession) {
-            runtimeLogger.info("runtime.session_bound", {
-              msg_id: message.messageId,
-              target_session_key: boundSession.targetSessionKey,
-              target_agent_id: boundSession.agentId,
-            });
-          }
-          const previousTimestamp = runtime.session.readSessionUpdatedAt?.({
-            storePath,
-            sessionKey: targetSessionKey,
-          });
-          const rawBody =
-            message.innerType === "text"
-              ? message.text
-              : message.innerType === "image"
-                ? "[Image]"
-                : `[Voice note${message.durationMs > 0 ? ` ${Math.round(message.durationMs / 1000)}s` : ""}]`;
-          const body = runtime.reply.formatAgentEnvelope({
-            channel: "chat4000",
-            from: conversationLabel,
-            body: rawBody,
-            timestamp: message.timestamp,
-            previousTimestamp,
-            envelope: runtime.reply.resolveEnvelopeFormatOptions(ctx.cfg),
-          });
-          let mediaPayload: Record<string, unknown> = {};
-          if (message.innerType === "image" || message.innerType === "audio") {
-            try {
-              const { saveMediaBuffer, buildAgentMediaPayload } = await loadMediaRuntime();
-              const saved = await saveMediaBuffer(
-                Buffer.from(message.dataBase64, "base64"),
-                message.mimeType,
-                "inbound",
-                undefined,
-                `chat4000-${message.messageId}`,
-              );
-              mediaPayload = buildAgentMediaPayload([
-                {
-                  path: saved.path,
-                  contentType: saved.contentType ?? message.mimeType,
-                },
-              ]);
-              runtimeLogger.info(message.innerType === "image" ? "runtime.image_forwarded" : "runtime.audio_forwarded", {
-                msg_id: message.messageId,
-                mime_type: message.mimeType,
-                media_path: saved.path,
-                ...(message.innerType === "audio" ? { duration_ms: message.durationMs } : {}),
-              });
-            } catch (error) {
-              runtimeLogger.info(message.innerType === "image" ? "runtime.image_dropped" : "runtime.audio_dropped", {
-                msg_id: message.messageId,
-                reason: String(error),
-              });
-              throw error instanceof Error
-                ? error
-                : new Error(`chat4000 ${message.innerType} save failed: ${String(error)}`);
-            }
-          }
-          const ctxPayload = runtime.reply.finalizeInboundContext({
-            Body: body,
-            BodyForAgent: rawBody,
-            RawBody: rawBody,
-            CommandBody: rawBody,
-            From: senderAddress,
-            To: recipientAddress,
-            SessionKey: targetSessionKey,
-            AccountId: route.accountId ?? ctx.account.accountId,
-            ChatType: "direct",
-            ConversationLabel: conversationLabel,
-            SenderId: ctx.account.groupId,
-            Provider: "chat4000",
-            Surface: "chat4000",
-            MessageSid: message.messageId,
-            MessageSidFull: message.messageId,
-            Timestamp: message.timestamp,
-            Chat4000FromRole: message.from?.role,
-            Chat4000FromDeviceId: message.from?.device_id,
-            Chat4000FromDeviceName: message.from?.device_name,
-            ...(message.innerType === "audio" ? { AudioDurationMs: message.durationMs } : {}),
-            OriginatingChannel: "chat4000",
-            OriginatingTo: senderAddress,
-            CommandAuthorized: true,
-            ...mediaPayload,
-          });
-          const { createChannelReplyPipeline } = await loadReplyPipelineRuntime();
-          let streamId = randomUUID();
-          let streamActive = false;
-          let finalSent = false;
-          let lastText = "";
-          let lastPartialText = "";
-          let streamBuffer = "";
-          let firstStreamChunkSent = false;
-          let flushTimer: NodeJS.Timeout | undefined;
-          let lastSentStatus: "thinking" | "typing" | "idle" | undefined;
-
-          runtimeLogger.info("runtime.ai_request_start", {
-            msg_id: message.messageId,
-          });
-
-          const {
-            sendMessageChat4000,
-            sendStatus,
-            sendStreamDelta,
-            sendStreamEnd,
-          } = await loadChannelRuntime();
-
-          const clearFlushTimer = () => {
-            if (!flushTimer) {
-              return;
-            }
-            clearTimeout(flushTimer);
-            flushTimer = undefined;
-          };
-
-          const sendTypingState = () => {
-            if (lastSentStatus === "typing") {
-              return;
-            }
-            sendStatus(ctx.account.groupId, "typing");
-            lastSentStatus = "typing";
-          };
-
-          const sendThinkingState = () => {
-            if (lastSentStatus === "thinking") {
-              return;
-            }
-            sendStatus(ctx.account.groupId, "thinking");
-            lastSentStatus = "thinking";
-          };
-
-          const flushBufferedStream = () => {
-            if (!streamBuffer) {
-              clearFlushTimer();
-              return;
-            }
-            const delta = streamBuffer;
-            streamBuffer = "";
-            clearFlushTimer();
-            streamActive = true;
-            lastText += delta;
-            sendStreamDelta(ctx.account.groupId, streamId, delta);
-          };
-
-          // Per protocol §6.4.2: a stream_id is append-only. To abandon a
-          // partial stream and continue with different text, end the old one
-          // with `reset: true` (so the iPhone deletes that bubble) and mint a
-          // fresh stream_id for the continuation.
-          const resetStreamForRewrite = (nextText: string) => {
-            clearFlushTimer();
-            streamBuffer = "";
-            if (streamActive && lastText.length > 0) {
-              sendStreamEnd(ctx.account.groupId, streamId, lastText, { reset: true });
-              runtimeLogger.info("runtime.stream_reset", {
-                msg_id: message.messageId,
-                stream_id: streamId,
-                reason: "non-monotonic-partial",
-                abandoned_chars: lastText.length,
-              });
-            }
-            streamId = randomUUID();
-            streamActive = false;
-            lastText = "";
-            firstStreamChunkSent = false;
-            if (nextText) {
-              queueStreamDelta(nextText);
-            }
-          };
-
-          // Reset all per-stream state so the NEXT deliver(kind:"final") (which
-          // OpenClaw fires once per element of the agent's `replies` array —
-          // see openclaw `dispatch-from-config.ts:1499–1525`) starts a clean
-          // new stream_id with its own text_end. Without this, multiple
-          // replies in the array would all collide on the same stream_id and
-          // emit multiple text_end frames against it (Bug A).
-          const startNewStream = () => {
-            streamId = randomUUID();
-            streamActive = false;
-            lastText = "";
-            lastPartialText = "";
-            streamBuffer = "";
-            firstStreamChunkSent = false;
-            clearFlushTimer();
-          };
-
-          const queueStreamDelta = (text: string) => {
-            if (!text) {
-              return;
-            }
-            sendTypingState();
-            if (!firstStreamChunkSent) {
-              firstStreamChunkSent = true;
-              streamActive = true;
-              lastText += text;
-              sendStreamDelta(ctx.account.groupId, streamId, text);
-              return;
-            }
-
-            streamBuffer += text;
-            if (streamBuffer.length >= STREAM_FLUSH_MIN_CHARS) {
-              flushBufferedStream();
-              return;
-            }
-            if (!flushTimer) {
-              flushTimer = setTimeout(() => {
-                flushBufferedStream();
-              }, STREAM_FLUSH_DELAY_MS);
-            }
-          };
-
-          const finalizeStreamingState = () => {
-            clearFlushTimer();
-            sendStatus(ctx.account.groupId, "idle");
-            lastSentStatus = "idle";
-          };
-
-          const replyPipeline = createChannelReplyPipeline({
-            cfg: ctx.cfg,
-            agentId: targetAgentId,
-            channel: "chat4000",
-            accountId: route.accountId ?? ctx.account.accountId,
-            typing: {
-              start: () => {
-                sendTypingState();
-              },
-              onStartError: (err) => {
-                runtimeLogger.info("runtime.ai_request_error", {
-                  msg_id: message.messageId,
-                  error: String(err),
-                  phase: "typing_start",
-                });
-              },
-            },
-          });
-
-          await runtime.session.recordInboundSession({
-            storePath,
-            sessionKey: (ctxPayload.SessionKey as string | undefined) ?? targetSessionKey,
-            ctx: ctxPayload,
-            onRecordError: (error: unknown) => {
-              runtimeLogger.info("runtime.ai_request_error", {
-                msg_id: message.messageId,
-                error: String(error),
-                phase: "record",
-              });
-              throw error instanceof Error
-                ? error
-                : new Error(`chat4000 session record failed: ${String(error)}`);
-            },
-          });
-
-          await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
-            ctx: ctxPayload,
-            cfg: ctx.cfg,
-            dispatcherOptions: {
-              ...replyPipeline,
-              deliver: async (payload: { text?: string }, info: { kind: string }) => {
-                const text = payload.text ?? "";
-                if (info.kind !== "final") {
-                  return;
-                }
-
-                if (streamActive) {
-                  flushBufferedStream();
-                  const finalText = text || lastText;
-                  if (finalText.length > 0) {
-                    sendStreamEnd(ctx.account.groupId, streamId, finalText);
-                  }
-                  finalizeStreamingState();
-                  finalSent = true;
-                  // Bug A fix: rotate stream state so the NEXT element of the
-                  // agent's reply array (if any) gets a fresh stream_id with
-                  // its own text_end, instead of double-text_end-ing this one.
-                  startNewStream();
-                  return;
-                }
-
-                if (!text.trim()) {
-                  ctx.log?.debug?.(
-                    `[${ctx.account.accountId}] runtime.send skipped empty response id=${message.messageId}`,
-                  );
-                  finalizeStreamingState();
-                  finalSent = true;
-                  startNewStream();
-                  return;
-                }
-
-                await sendMessageChat4000(senderAddress, text, {
-                  cfg: ctx.cfg,
-                  accountId: ctx.account.accountId,
-                  replyToId: message.messageId,
-                });
-                finalizeStreamingState();
-                finalSent = true;
-                startNewStream();
-              },
-              onError: (error: unknown, info: { kind: string }) => {
-                runtimeLogger.info("runtime.ai_request_error", {
-                  msg_id: message.messageId,
-                  error: String(error),
-                  phase: info.kind,
-                });
-                finalizeStreamingState();
-              },
-            },
-            replyOptions: {
-              onReasoningStream: async () => {
-                sendThinkingState();
-              },
-              onReasoningEnd: async () => {
-                sendTypingState();
-              },
-              onAssistantMessageStart: async () => {
-                sendTypingState();
-              },
-              onPartialReply: async (payload: { text?: string }) => {
-                const text = payload.text ?? "";
-                if (!text) {
-                  return;
-                }
-                if (!lastPartialText) {
-                  lastPartialText = text;
-                  queueStreamDelta(text);
-                  return;
-                }
-                if (text === lastPartialText) {
-                  return;
-                }
-                if (text.startsWith(lastPartialText)) {
-                  const delta = text.slice(lastPartialText.length);
-                  lastPartialText = text;
-                  queueStreamDelta(delta);
-                  return;
-                }
-                lastPartialText = text;
-                resetStreamForRewrite(text);
-              },
-              onToolStart: async () => {
-                sendThinkingState();
-              },
-              onCompactionStart: async () => {
-                sendThinkingState();
-              },
-              onCompactionEnd: async () => {
-                sendTypingState();
-              },
-            },
-          });
-
-          if (!finalSent) {
-            finalizeStreamingState();
-          }
-
-          runtimeLogger.info("runtime.ai_request_success", {
-            msg_id: message.messageId,
-          });
-        },
-        log: ctx.log as MonitorOptions["log"],
+          setConnected(false);
+        } else if (typeof state === "object" && "kind" in state && state.kind === "failed") {
+          ctx.log?.error?.(`[${ctx.account.accountId}] Relay failed: ${state.reason}`);
+          setConnected(false);
+        }
       });
+
+      transport.onReceive((inner) => {
+        void handleInbound({
+          inner,
+          transport,
+          ctx,
+          runtimeLogger,
+        });
+      });
+
+      transport.connect({
+        accountId: ctx.account.accountId,
+        groupId: ctx.account.groupId,
+        groupKeyBytes: ctx.account.groupKeyBytes,
+        relayUrl: ctx.account.relayUrl,
+        releaseChannel: ctx.account.config.releaseChannel,
+        runtimeLogLevel: ctx.account.runtimeLogLevel,
+      });
+
+      // Block until OpenClaw aborts. Without this `await`, the Promise
+      // returned from `startAccount` resolves the moment the synchronous
+      // setup finishes, which OpenClaw interprets as "channel exited" and
+      // immediately triggers the auto-restart loop. Awaiting here keeps
+      // the channel "alive" for OpenClaw's lifecycle bookkeeping.
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal.addEventListener(
+          "abort",
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      transport.disconnect();
+      unregisterTransport(ctx.account.accountId);
     },
   },
 
-  // ─── Outbound (agent response → relay → iPhone) ────────────────────────
+  // ─── Outbound (agent → relay → iPhone) ─────────────────────────────────
 
   outbound: {
     base: {
       deliveryMode: "direct" as const,
-      textChunkLimit: 4096, // Generous — relay handles up to 64KB
-      sanitizeText: ({ text }: { text: string }) => text, // No sanitization needed (app handles rendering)
+      textChunkLimit: 4096,
+      sanitizeText: ({ text }: { text: string }) => text,
     },
     attachedResults: {
       channel: "chat4000" as const,
@@ -660,12 +284,19 @@ export const chat4000Plugin = {
         accountId?: string;
         replyToId?: string;
       }) => {
-        const { sendMessageChat4000 } = await loadChannelRuntime();
-        return await sendMessageChat4000(ctx.to, ctx.text, {
+        const account = resolveChat4000Account({
           cfg: ctx.cfg,
           accountId: ctx.accountId,
-          replyToId: ctx.replyToId,
         });
+        if (!account.configured) {
+          throw new Error(`chat4000 not configured for account "${account.accountId}"`);
+        }
+        const transport = getTransport(account.accountId);
+        if (!transport) {
+          throw new Error(`No active relay connection for account "${account.accountId}"`);
+        }
+        const messageId = transport.send({ kind: "text", text: ctx.text });
+        return { messageId };
       },
       sendMedia: async (ctx: {
         cfg: { channels?: Record<string, unknown> };
@@ -675,22 +306,435 @@ export const chat4000Plugin = {
         accountId?: string;
         replyToId?: string;
       }) => {
-        // V1: Send media URL as text. V2: Upload and send inline.
-        const { sendMessageChat4000 } = await loadChannelRuntime();
+        // V1: Send media URL as text. V2: upload + inline.
+        const account = resolveChat4000Account({
+          cfg: ctx.cfg,
+          accountId: ctx.accountId,
+        });
+        if (!account.configured) {
+          throw new Error(`chat4000 not configured for account "${account.accountId}"`);
+        }
+        const transport = getTransport(account.accountId);
+        if (!transport) {
+          throw new Error(`No active relay connection for account "${account.accountId}"`);
+        }
         const messageText = ctx.mediaUrl
           ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}`
           : ctx.text;
-        return await sendMessageChat4000(ctx.to, messageText, {
-          cfg: ctx.cfg,
-          accountId: ctx.accountId,
-          replyToId: ctx.replyToId,
-        });
+        const messageId = transport.send({ kind: "text", text: messageText });
+        return { messageId };
       },
     },
   },
 };
 
-// Type import for monitor options
-type MonitorOptions = Parameters<
-  Awaited<ReturnType<typeof loadChannelRuntime>>["monitorChat4000Provider"]
->[0];
+// ─── Inbound dispatch ───────────────────────────────────────────────────────
+
+type InboundCtx = {
+  cfg: { channels?: Record<string, unknown> };
+  accountId: string;
+  account: ResolvedChat4000Account;
+  channelRuntime?: unknown;
+  log?: {
+    info?: (msg: string) => void;
+    warn?: (msg: string) => void;
+    error?: (msg: string) => void;
+    debug?: (msg: string) => void;
+  };
+};
+
+async function handleInbound(params: {
+  inner: InnerMessage;
+  transport: MessageTransport;
+  ctx: InboundCtx;
+  runtimeLogger: RuntimeLogger;
+}): Promise<void> {
+  const { inner, transport, ctx, runtimeLogger } = params;
+  const isFromApp = inner.from?.role === "app";
+
+  // Inner ack frames flow through onReceive but the plugin doesn't act on
+  // them in v1 — they would drive a "delivered" indicator if the plugin
+  // ever exposed a UI. Logged only.
+  if (inner.body.kind === "ack") {
+    runtimeLogger.info("runtime.inner_ack_recv", {
+      msg_id: inner.id,
+      refs: inner.body.refs,
+      stage: inner.body.stage,
+      from_role: inner.from?.role,
+    });
+    return;
+  }
+
+  // Streaming chunks from another sender; we don't aggregate inbound
+  // streams. Nothing to do beyond logging.
+  if (inner.body.kind === "textDelta" || inner.body.kind === "textEnd") {
+    ctx.log?.debug?.(
+      `[${ctx.account.accountId}] Ignoring inbound ${inner.body.kind} from peer`,
+    );
+    return;
+  }
+
+  if (inner.body.kind === "status") {
+    ctx.log?.debug?.(
+      `[${ctx.account.accountId}] Received peer status: ${inner.body.status}`,
+    );
+    return;
+  }
+
+  if (inner.body.kind === "unknown") {
+    runtimeLogger.info("runtime.msg_dropped", {
+      msg_id: inner.id,
+      reason: "unsupported_inner_type",
+      inner_t: inner.body.rawType,
+    });
+    return;
+  }
+
+  // Beyond this point: text / image / audio.
+  if (
+    inner.body.kind !== "text" &&
+    inner.body.kind !== "image" &&
+    inner.body.kind !== "audio"
+  ) {
+    return;
+  }
+
+  // Per protocol §6.6.5: emit `received` ack BEFORE running the agent so the
+  // app's ✓✓ tick lights up immediately, not after token generation. Only
+  // for app-origin frames. Wrapped in try/catch because the transport may
+  // already be disconnected if a config-reload tore it down while this
+  // inbound was mid-processing.
+  if (isFromApp) {
+    try {
+      transport.send({ kind: "ack", refs: inner.id, stage: "received" });
+    } catch (err) {
+      runtimeLogger.info("runtime.inner_ack_send_error", {
+        msg_id: inner.id,
+        error: String(err),
+      });
+      return;
+    }
+  }
+
+  if (!ctx.channelRuntime) {
+    runtimeLogger.info("runtime.ai_request_error", {
+      msg_id: inner.id,
+      error: "channelRuntime missing",
+    });
+    ctx.log?.warn?.(
+      `[${ctx.account.accountId}] runtime.dispatch unavailable: channelRuntime missing`,
+    );
+    return;
+  }
+
+  await dispatchToAgent({
+    inner: inner as InnerMessage & {
+      body: InnerTextBody | InnerImageBody | InnerAudioBody;
+    },
+    transport,
+    ctx,
+    runtimeLogger,
+  });
+}
+
+async function dispatchToAgent(params: {
+  inner: InnerMessage & { body: InnerTextBody | InnerImageBody | InnerAudioBody };
+  transport: MessageTransport;
+  ctx: InboundCtx;
+  runtimeLogger: RuntimeLogger;
+}): Promise<void> {
+  const { inner, transport, ctx, runtimeLogger } = params;
+
+  const senderAddress = `chat4000:${ctx.account.groupId}`;
+  const recipientAddress = "chat4000:agent";
+  const conversationLabel = `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`;
+
+  const runtime = ctx.channelRuntime as {
+    routing: {
+      resolveAgentRoute: (params: {
+        cfg: unknown;
+        channel: string;
+        accountId: string;
+        peer: { kind: "direct"; id: string };
+      }) => { agentId: string; sessionKey: string; accountId?: string };
+    };
+    session: {
+      resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
+      readSessionUpdatedAt?: (params: { storePath: string; sessionKey: string }) => number | undefined;
+      recordInboundSession: (params: {
+        storePath: string;
+        sessionKey: string;
+        ctx: Record<string, unknown>;
+        onRecordError: (err: unknown) => void;
+      }) => Promise<void>;
+    };
+    reply: {
+      resolveEnvelopeFormatOptions: (cfg: unknown) => unknown;
+      formatAgentEnvelope: (params: {
+        channel: string;
+        from: string;
+        body: string;
+        timestamp?: number;
+        previousTimestamp?: number;
+        envelope: unknown;
+      }) => string;
+      finalizeInboundContext: (ctx: Record<string, unknown>) => Record<string, unknown>;
+      dispatchReplyWithBufferedBlockDispatcher: (params: {
+        ctx: Record<string, unknown>;
+        cfg: unknown;
+        dispatcherOptions: Record<string, unknown>;
+        replyOptions?: Record<string, unknown>;
+      }) => Promise<unknown>;
+    };
+  };
+
+  const route = runtime.routing.resolveAgentRoute({
+    cfg: ctx.cfg,
+    channel: "chat4000",
+    accountId: ctx.account.accountId,
+    peer: { kind: "direct", id: ctx.account.groupId },
+  });
+  const boundSession = getChat4000SessionBinding({
+    accountId: ctx.account.accountId,
+    groupId: ctx.account.groupId,
+  });
+  const targetSessionKey = boundSession?.targetSessionKey ?? route.sessionKey;
+  const targetAgentId = boundSession?.agentId ?? route.agentId;
+  const storePath =
+    boundSession?.storePath ??
+    runtime.session.resolveStorePath(
+      (ctx.cfg as { session?: { store?: string } }).session?.store,
+      { agentId: targetAgentId },
+    );
+
+  if (boundSession) {
+    runtimeLogger.info("runtime.session_bound", {
+      msg_id: inner.id,
+      target_session_key: boundSession.targetSessionKey,
+      target_agent_id: boundSession.agentId,
+    });
+  }
+
+  const previousTimestamp = runtime.session.readSessionUpdatedAt?.({
+    storePath,
+    sessionKey: targetSessionKey,
+  });
+
+  const rawBody =
+    inner.body.kind === "text"
+      ? inner.body.text
+      : inner.body.kind === "image"
+        ? "[Image]"
+        : `[Voice note${inner.body.durationMs > 0 ? ` ${Math.round(inner.body.durationMs / 1000)}s` : ""}]`;
+
+  const body = runtime.reply.formatAgentEnvelope({
+    channel: "chat4000",
+    from: conversationLabel,
+    body: rawBody,
+    timestamp: inner.ts,
+    previousTimestamp,
+    envelope: runtime.reply.resolveEnvelopeFormatOptions(ctx.cfg),
+  });
+
+  let mediaPayload: Record<string, unknown> = {};
+  if (inner.body.kind === "image" || inner.body.kind === "audio") {
+    try {
+      const { saveMediaBuffer, buildAgentMediaPayload } = await loadMediaRuntime();
+      const saved = await saveMediaBuffer(
+        Buffer.from(inner.body.dataBase64, "base64"),
+        inner.body.mimeType,
+        "inbound",
+        undefined,
+        `chat4000-${inner.id}`,
+      );
+      mediaPayload = buildAgentMediaPayload([
+        {
+          path: saved.path,
+          contentType: saved.contentType ?? inner.body.mimeType,
+        },
+      ]);
+      runtimeLogger.info(
+        inner.body.kind === "image" ? "runtime.image_forwarded" : "runtime.audio_forwarded",
+        {
+          msg_id: inner.id,
+          mime_type: inner.body.mimeType,
+          media_path: saved.path,
+          ...(inner.body.kind === "audio" ? { duration_ms: inner.body.durationMs } : {}),
+        },
+      );
+    } catch (error) {
+      runtimeLogger.info(
+        inner.body.kind === "image" ? "runtime.image_dropped" : "runtime.audio_dropped",
+        {
+          msg_id: inner.id,
+          reason: String(error),
+        },
+      );
+      throw error instanceof Error
+        ? error
+        : new Error(`chat4000 ${inner.body.kind} save failed: ${String(error)}`);
+    }
+  }
+
+  const ctxPayload = runtime.reply.finalizeInboundContext({
+    Body: body,
+    BodyForAgent: rawBody,
+    RawBody: rawBody,
+    CommandBody: rawBody,
+    From: senderAddress,
+    To: recipientAddress,
+    SessionKey: targetSessionKey,
+    AccountId: route.accountId ?? ctx.account.accountId,
+    ChatType: "direct",
+    ConversationLabel: conversationLabel,
+    SenderId: ctx.account.groupId,
+    Provider: "chat4000",
+    Surface: "chat4000",
+    MessageSid: inner.id,
+    MessageSidFull: inner.id,
+    Timestamp: inner.ts,
+    Chat4000FromRole: inner.from?.role,
+    Chat4000FromDeviceId: inner.from?.deviceId,
+    Chat4000FromDeviceName: inner.from?.deviceName,
+    ...(inner.body.kind === "audio" ? { AudioDurationMs: inner.body.durationMs } : {}),
+    OriginatingChannel: "chat4000",
+    OriginatingTo: senderAddress,
+    CommandAuthorized: true,
+    ...mediaPayload,
+  });
+
+  const { createChannelReplyPipeline } = await loadReplyPipelineRuntime();
+
+  // Reply pipeline state: dispatcher + last-status memo.
+  const dispatcher = new StreamDispatcher({
+    transport,
+    onStreamReset: ({ streamId, abandonedChars }) => {
+      runtimeLogger.info("runtime.stream_reset", {
+        msg_id: inner.id,
+        stream_id: streamId,
+        reason: "non-monotonic-partial",
+        abandoned_chars: abandonedChars,
+      });
+    },
+  });
+
+  let lastSentStatus: "thinking" | "typing" | "idle" | undefined;
+  const sendStatus = (status: "thinking" | "typing" | "idle") => {
+    if (lastSentStatus === status) return;
+    transport.send({ kind: "status", status });
+    lastSentStatus = status;
+  };
+  const finalizeStreamingState = () => {
+    dispatcher.flush();
+    sendStatus("idle");
+  };
+
+  let finalSent = false;
+
+  runtimeLogger.info("runtime.ai_request_start", {
+    msg_id: inner.id,
+  });
+
+  const replyPipeline = createChannelReplyPipeline({
+    cfg: ctx.cfg,
+    agentId: targetAgentId,
+    channel: "chat4000",
+    accountId: route.accountId ?? ctx.account.accountId,
+    typing: {
+      start: () => {
+        sendStatus("typing");
+      },
+      onStartError: (err) => {
+        runtimeLogger.info("runtime.ai_request_error", {
+          msg_id: inner.id,
+          error: String(err),
+          phase: "typing_start",
+        });
+      },
+    },
+  });
+
+  await runtime.session.recordInboundSession({
+    storePath,
+    sessionKey: targetSessionKey,
+    ctx: ctxPayload,
+    onRecordError: (error: unknown) => {
+      runtimeLogger.info("runtime.ai_request_error", {
+        msg_id: inner.id,
+        error: String(error),
+        phase: "record",
+      });
+      throw error instanceof Error
+        ? error
+        : new Error(`chat4000 session record failed: ${String(error)}`);
+    },
+  });
+
+  await runtime.reply.dispatchReplyWithBufferedBlockDispatcher({
+    ctx: ctxPayload,
+    cfg: ctx.cfg,
+    dispatcherOptions: {
+      ...replyPipeline,
+      deliver: async (payload: { text?: string }, info: { kind: string }) => {
+        if (info.kind !== "final") return;
+        const text = payload.text ?? "";
+        const result = dispatcher.onFinal(text);
+        if (result === "oneshot") {
+          // No streaming had occurred but the agent produced final text —
+          // ship it as a single `text` frame instead of a streaming pair.
+          transport.send({ kind: "text", text });
+        }
+        if (result === "empty") {
+          ctx.log?.debug?.(
+            `[${ctx.account.accountId}] runtime.send skipped empty response id=${inner.id}`,
+          );
+        }
+        finalizeStreamingState();
+        finalSent = true;
+      },
+      onError: (error: unknown, info: { kind: string }) => {
+        runtimeLogger.info("runtime.ai_request_error", {
+          msg_id: inner.id,
+          error: String(error),
+          phase: info.kind,
+        });
+        finalizeStreamingState();
+      },
+    },
+    replyOptions: {
+      onReasoningStream: async () => {
+        sendStatus("thinking");
+      },
+      onReasoningEnd: async () => {
+        sendStatus("typing");
+      },
+      onAssistantMessageStart: async () => {
+        sendStatus("typing");
+      },
+      onPartialReply: async (payload: { text?: string }) => {
+        const text = payload.text ?? "";
+        if (!text) return;
+        sendStatus("typing");
+        dispatcher.onPartial(text);
+      },
+      onToolStart: async () => {
+        sendStatus("thinking");
+      },
+      onCompactionStart: async () => {
+        sendStatus("thinking");
+      },
+      onCompactionEnd: async () => {
+        sendStatus("typing");
+      },
+    },
+  });
+
+  if (!finalSent) {
+    finalizeStreamingState();
+  }
+  dispatcher.dispose();
+
+  runtimeLogger.info("runtime.ai_request_success", {
+    msg_id: inner.id,
+  });
+}
