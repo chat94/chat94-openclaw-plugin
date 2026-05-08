@@ -9,7 +9,7 @@ import {
   resolveChat4000KeyFilePath,
   saveStoredGroupKey,
 } from "./key-store.js";
-import { hostPairingSession } from "./pairing.js";
+import { hostPairingSession, hostPairingSessionContinuous } from "./pairing.js";
 import {
   clearChat4000SessionBinding,
   findOpenClawSessionCandidate,
@@ -44,6 +44,14 @@ type SetupCommandOptions = {
 
 type PairCommandOptions = SetupCommandOptions & {
   code?: string;
+};
+
+type PairManyCommandOptions = {
+  account?: string;
+  code?: string;
+  pairingLogLevel?: "info" | "debug";
+  max?: string;
+  delayMs?: string;
 };
 
 type SessionListOptions = {
@@ -83,6 +91,18 @@ export function registerChat4000Cli(api: PluginApiLike): void {
         .option("--pairing-log-level <level>", "Pairing log level (info|debug)")
         .action(async (opts: PairCommandOptions) => {
           await runPairingCommand(api, opts).catch(handleCliError);
+        });
+
+      chat4000
+        .command("pair-many")
+        .description("Continuously pair multiple devices with the same fixed code (e.g. App Store review mode)")
+        .option("--account <id>", "Account id", "default")
+        .option("--code <value>", "Fixed pairing code (required)")
+        .option("--max <n>", "Stop after N successful pairings (default: unlimited)")
+        .option("--delay-ms <ms>", "Delay between pairings in milliseconds", "1000")
+        .option("--pairing-log-level <level>", "Pairing log level (info|debug)")
+        .action(async (opts: PairManyCommandOptions) => {
+          await runPairManyCommand(api, opts).catch(handleCliError);
         });
 
       chat4000
@@ -304,6 +324,94 @@ async function runPairingCommand(api: PluginApiLike, opts: PairCommandOptions): 
   output.write(`Pairing room: ${result.roomId}\n`);
   output.write(`Connected group: ${resolveChat4000Account({ cfg: cfg as { channels?: Record<string, unknown> }, accountId: account.accountId }).groupId || "(local key ready)"}\n`);
   return true;
+}
+
+async function runPairManyCommand(
+  api: PluginApiLike,
+  opts: PairManyCommandOptions,
+): Promise<void> {
+  const code = opts.code?.trim();
+  if (!code) {
+    throw new Error(
+      'pair-many requires --code <fixed-code> so reviewers know what to type. Example: openclaw chat4000 pair-many --code DEMO-1234',
+    );
+  }
+
+  const cfg = loadConfig(api);
+  const account = resolveChat4000Account({
+    cfg: cfg as { channels?: Record<string, unknown> },
+    accountId: opts.account,
+  });
+  const pairingLogLevel = normalizePairingLogLevel(opts.pairingLogLevel ?? account.pairingLogLevel);
+  await writeChannelConfig(api, {
+    accountId: account.accountId,
+    pairingLogLevel,
+    runtimeLogLevel: account.runtimeLogLevel,
+  });
+
+  const max = opts.max
+    ? Math.max(1, Number.parseInt(opts.max, 10) || 1)
+    : Number.POSITIVE_INFINITY;
+  const iterationDelayMs = Math.max(0, Number.parseInt(opts.delayMs ?? "1000", 10) || 0);
+
+  const groupKeyBytes = ensureLocalKeyForAccount(account);
+
+  output.write(`Pairing code: ${code}\n`);
+  output.write(`${renderPairingCodeBanner(code)}\n`);
+  await renderQrIfAvailable(buildPairingQrPayload({ code }));
+  output.write(
+    `Continuous pairing — Ctrl+C to stop. Max: ${
+      Number.isFinite(max) ? max : "unlimited"
+    }. Delay between joiners: ${iterationDelayMs}ms.\n`,
+  );
+
+  const controller = new AbortController();
+  let stopping = false;
+  const onSigint = () => {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    output.write("\nStopping continuous pairing after current handshake (or immediately if idle).\n");
+    controller.abort();
+  };
+  process.once("SIGINT", onSigint);
+
+  let currentIteration = 1;
+  const startedAt = Date.now();
+  try {
+    const total = await hostPairingSessionContinuous({
+      relayUrl: account.relayUrl,
+      groupKeyBytes,
+      code,
+      logLevel: pairingLogLevel,
+      maxPairings: Number.isFinite(max) ? max : undefined,
+      iterationDelayMs,
+      abortSignal: controller.signal,
+      onStatus: (status, detail) => {
+        output.write(`[#${currentIteration}] ${formatStatus(status)} ${detail}\n`);
+      },
+      onPaired: (sequence, result) => {
+        output.write(`Paired device #${sequence} (room=${result.roomId.slice(0, 12)}...)\n`);
+        currentIteration = sequence + 1;
+      },
+      onIterationError: (error, sequence) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const logPath = dumpChat4000Trace("cli-pair-many", error, {
+          accountId: account.accountId,
+          code,
+          sequence,
+        });
+        output.write(`[#${currentIteration}] iteration error: ${message}\nTrace log: ${logPath}\n`);
+      },
+    });
+    const elapsedSec = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    output.write(
+      `Done. Paired ${total} device${total === 1 ? "" : "s"} in ${elapsedSec}s.\n`,
+    );
+  } finally {
+    process.off("SIGINT", onSigint);
+  }
 }
 
 async function runListSessions(api: PluginApiLike, opts: SessionListOptions): Promise<void> {

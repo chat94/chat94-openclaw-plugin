@@ -470,6 +470,46 @@ async function hostPairingSessionOnce(opts: PairHostOptions): Promise<PairHostRe
   });
 }
 
+export type ContinuousHostOptions = PairHostOptions & {
+  maxPairings?: number;
+  iterationDelayMs?: number;
+  onPaired?: (sequence: number, result: PairHostResult) => void;
+  onIterationError?: (error: unknown, sequence: number) => void;
+};
+
+export async function hostPairingSessionContinuous(
+  opts: ContinuousHostOptions,
+): Promise<number> {
+  const max = opts.maxPairings ?? Number.POSITIVE_INFINITY;
+  const iterationDelayMs = Math.max(0, opts.iterationDelayMs ?? 1_000);
+  let count = 0;
+
+  while (!opts.abortSignal?.aborted && count < max) {
+    try {
+      const result = await hostPairingSession(opts);
+      count += 1;
+      opts.onPaired?.(count, result);
+    } catch (error) {
+      if (opts.abortSignal?.aborted) {
+        break;
+      }
+      opts.onIterationError?.(error, count);
+    }
+    if (count >= max || opts.abortSignal?.aborted) {
+      break;
+    }
+    if (iterationDelayMs > 0) {
+      try {
+        await delay(iterationDelayMs, opts.abortSignal);
+      } catch {
+        break;
+      }
+    }
+  }
+
+  return count;
+}
+
 function isRetryablePairingError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
