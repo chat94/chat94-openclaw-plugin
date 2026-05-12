@@ -6,30 +6,74 @@
 
 ---
 
-## 0. Prerequisites
+## 0. Locate OpenClaw and establish a session
 
-The user **must already have OpenClaw installed and running** on the machine where you are operating. This document does NOT walk through OpenClaw installation.
+**Before anything else, figure out which machine OpenClaw is on and how you can reach it.** This step is the most commonly skipped one, and skipping it leads to the agent quietly installing the plugin in the wrong place.
 
-Check it:
+### 0.1. Ask the user where OpenClaw lives
+
+OpenClaw can be:
+
+- **Local** — running on the same machine you're operating on right now (your current shell environment).
+- **Remote** — running on a server, VM, container host, or another developer machine. You need to connect to it before any of the install commands below will hit the right system.
+
+If your existing context already strongly implies one of these (for example, the user has been editing files on a specific remote host this session, or `CLAUDE.md` / repo notes name a specific server, or there's an already-open SSH session in scope), **proactively offer that machine as the suggested target** rather than asking blind. Phrase it like:
+
+> Based on context, I think OpenClaw is on `dev.example.com` — should I run the install there, or somewhere else?
+
+Otherwise, ask plainly:
+
+> Is OpenClaw running on this machine, or on a remote machine I need to connect to?
+
+### 0.2. If remote, get the connection details
+
+If remote, you need a way to run shell commands on that host. Ask the user, in order:
+
+1. **Connection method** — SSH (default), `gcloud compute ssh`, `aws ssm start-session`, `kubectl exec`, `docker exec`, or something else?
+2. **Address** — `user@host`, instance id, container name, etc.
+3. **Auth** — does the SSH config already work (`ssh devbox` Just Works™), or do they need to point you at a specific identity file, jump host, or port? Don't guess; for security-sensitive things like SSH keys, ask explicitly. If it's not already in your context, the user has to tell you.
+4. **A quick connectivity test** before anything else:
+
+   ```bash
+   ssh devbox "echo connected && uname -a"
+   ```
+
+   If that returns within a couple of seconds and prints `connected`, you're good. If it hangs or fails, fix that with the user before continuing — the rest of this document is wasted time otherwise.
+
+From here on, every command in this document that says `openclaw …` or `~/.openclaw/…` is meant to run **on the OpenClaw host**, not on your local machine (unless they're the same). When you write commands, wrap them appropriately for the connection method, e.g.:
 
 ```bash
-openclaw --version
+# Local:
+openclaw plugin install @chat4000/openclaw-plugin
+
+# Remote via SSH:
+ssh devbox "openclaw plugin install @chat4000/openclaw-plugin"
+```
+
+### 0.3. Verify OpenClaw is actually installed there
+
+Once you can reach the right machine, confirm OpenClaw exists on it:
+
+```bash
+openclaw --version                  # local
+ssh devbox "openclaw --version"     # remote
 ```
 
 If that command is not found, **stop**. Tell the user:
 
-> OpenClaw is required and not detected on this machine. Install OpenClaw first (use its own installation instructions), make sure `openclaw --version` works, then re-run this setup.
+> OpenClaw is required and not detected on `<machine>`. Install OpenClaw first (use its own installation instructions), make sure `openclaw --version` works there, then re-run this setup.
 
-Do not try to install OpenClaw yourself. The plugin is meaningless without it.
+Do not try to install OpenClaw yourself. The plugin is meaningless without it. This document does NOT walk through OpenClaw installation.
 
 ---
 
 ## 1. What you are about to do
 
-This setup has three phases. Do them in order.
+This setup has four phases. Do them in order.
 
 | Phase | What                                                        | Who does it |
 | ----- | ----------------------------------------------------------- | ----------- |
+| **0** | Locate OpenClaw (local vs remote) and open a session to it  | Mixed       |
 | **1** | Install the chat4000 plugin into OpenClaw                   | You (AI)    |
 | **2** | Install + pair one or more chat4000 clients (CLI/iOS/macOS) | Mixed       |
 | **3** | Verify the round-trip with a real message                   | Mostly you  |
@@ -461,7 +505,8 @@ The user-facing documentation site is at https://chat4000.com — the `/help` an
 
 Before declaring setup complete, confirm each of these in order:
 
-- [ ] `openclaw --version` works (Phase 0).
+- [ ] Confirmed whether OpenClaw is local or remote, and (if remote) that you can run shell commands on the OpenClaw host (Phase 0.1–0.2).
+- [ ] `openclaw --version` works on the OpenClaw host (Phase 0.3).
 - [ ] `openclaw plugin install @chat4000/openclaw-plugin` exited successfully (Phase 1.1).
 - [ ] The OpenClaw gateway was restarted after install (Phase 1.2).
 - [ ] `openclaw chat4000 status` shows the plugin registered, even if `configured: no` initially (Phase 1.2).
