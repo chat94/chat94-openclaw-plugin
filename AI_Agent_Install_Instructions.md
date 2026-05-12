@@ -154,11 +154,20 @@ configured: no
 openclaw chat4000 pair
 ```
 
-This single command does everything needed for the plugin side:
+**Run this command exactly as written. Do NOT pass `--code`.**
+
+The `pair` subcommand accepts an optional `--code <value>` flag that lets you specify the pairing code manually instead of letting the system generate a random one. **You must never use it.** Here's why it's dangerous when an AI agent is the one running the command:
+
+- Pairing codes route to a pairing room derived from the code (`sha256("pairing-v1:" + normalized_code)`). Anyone else who knows the same code is racing to join the same room.
+- A random eight-character code from the 28-character pairing alphabet has ~10¹¹ possible values — practically unguessable for the ~60-second window the room stays open.
+- If an AI agent picks a "memorable" code (`DEMO-1234`, the project name, the user's username, etc.), or — worse — if the same agent picks the same code across many users because the same instructions are deployed many times, then a third party can race the legitimate client into the room and walk off with the wrapped group key, which is the entire credential to the encrypted thread.
+- Therefore: never set the code yourself, and don't let the user nudge you toward a "nice" one for convenience. If they ask, decline and explain.
+
+This single `openclaw chat4000 pair` command does everything needed for the plugin side:
 
 1. Writes the chat4000 channel config into the OpenClaw config file (if it isn't already there).
 2. **If no local group key exists yet**, mints a fresh 32-byte one and writes it to `~/.openclaw/plugins/chat4000/keys/default.json` (chmod 600). On subsequent runs, the existing key is reused — so the first `pair` and every later `pair` are exactly the same command; only the first one mints.
-3. Generates a pairing code like `ABCD-2346`, derives the matching room id, and starts a pairing session — prints the code plus a big ASCII banner plus an ASCII QR, and waits for a client to join.
+3. Generates a **fresh random** pairing code like `ABCD-2346`, derives the matching room id, and starts a pairing session — prints the code plus a big ASCII banner plus an ASCII QR code, and waits for a client to join.
 
 Expected output during the wait (abridged):
 
@@ -169,6 +178,12 @@ Key file: /home/<user>/.openclaw/plugins/chat4000/keys/default.json
 Pairing code: ABCD-2346
 ...big ASCII banner with the code drawn as ASCII art...
 QR payload: chat4000://pair?code=ABCD-2346
+
+█▀▀▀▀▀█ ▀▀ ▀▄▀█▄ █▀▀▀▀▀█
+█ ███ █ ▄▄▄▀▀▀█▀ █ ███ █
+█ ▀▀▀ █ ▀█▀█▄▀█▄ █ ▀▀▀ █
+...ASCII QR continues...
+
 [1/5] Opening pairing session
 [2/5] Connected to relay
 [3/5] Waiting for client to join
@@ -177,6 +192,34 @@ QR payload: chat4000://pair?code=ABCD-2346
 (On the second and later runs of `pair`, the "Created local chat4000 key" line will be absent — the existing key is reused.)
 
 It will **block** here until a client pairs. That is the cue to move to Phase 2. **Leave this terminal running** — do not kill it. If you need to run other commands, open a second terminal.
+
+#### 2.3.1. Capture the output and show it to the user
+
+The plugin prints both a **typed pairing code** (8 chars, dash in the middle, e.g. `ABCD-2346`) and a **visual ASCII QR code** that encodes `chat4000://pair?code=…`. The user needs at least one of those to complete pairing on a client.
+
+- If they're going to pair the **CLI** (Phase 3.1), they need the typed code.
+- If they're going to pair the **iOS** or **macOS** app (Phase 3.2 / 3.3), the easiest path is to scan the QR with the phone's camera — but only if they can actually see it.
+
+You are likely the one looking at the terminal output, especially over SSH. That means **you have to relay the QR to the user**:
+
+1. Capture the full pairing command output, including all the ASCII QR rows. Don't truncate.
+2. Show the user the typed pairing code prominently.
+3. Show the user the ASCII QR exactly as printed, preserving line breaks and the block characters, inside a fenced code block in your chat reply so the renderer treats it as monospace. If your front-end mangles wide characters or strips whitespace, fall back to printing just the `QR payload:` URL and tell the user they can paste it into a QR generator (or just type the code instead).
+
+Example reply shape:
+
+> Pairing is open. Code: **ABCD-2346** — type it into chat4000 on your phone, or scan this:
+>
+> ```
+> █▀▀▀▀▀█ ▀▀ ▀▄▀█▄ █▀▀▀▀▀█
+> █ ███ █ ▄▄▄▀▀▀█▀ █ ███ █
+> █ ▀▀▀ █ ▀█▀█▄▀█▄ █ ▀▀▀ █
+> ...etc...
+> ```
+>
+> The room stays open until you join. Tell me when you're paired and I'll verify the round-trip.
+
+If you're going to display the QR, sanity-check that it's not being scrambled. A QR that's missing rows or whose block characters got replaced by `?` is useless. If unsure, prefer code + URL over a broken QR.
 
 Take note of the pairing code (e.g. `ABCD-2346`) — Phase 2 needs it.
 
@@ -278,12 +321,16 @@ The CLI is now ready for Phase 3 verification.
 
 You **cannot** install this for the user. Walk them through it.
 
+Before sending the instructions below, **make sure you've already shown the user the QR code from Phase 2.3.1** — the iOS scan path is by far the smoothest, and they need to be able to see the QR. If you can't reliably render the QR (front-end mangles block characters, low-bandwidth chat, etc.), just emphasize the typed-code path.
+
 Give the user these steps verbatim:
 
 1. On the iPhone, open the **App Store**.
 2. Search for **chat4000** and install the app (publisher: NeonNode Ltd).
 3. Open chat4000.
-4. On the pairing screen, type the 8-character pairing code from earlier (`ABCD-2346`) into the boxes, **or** tap **Scan QR** and point the camera at the ASCII QR the plugin terminal printed during Phase 2.3.
+4. On the pairing screen, either:
+   - tap **Scan QR** and point the camera at the ASCII QR I showed you above (works fine when the QR is rendered on a desktop monitor — point the iPhone camera at the screen), **or**
+   - type the 8-character pairing code into the boxes (e.g. `ABCD-2346`).
 5. When it shows "✓ Paired" / drops them into the chat view, pairing is done.
 
 If the pairing window on the plugin side has already expired (default room TTL is 7 days but the visible code is one-shot per successful join), have the user trigger a new code:
@@ -427,9 +474,11 @@ openclaw chat4000 pair                               # mint key (if missing) + s
 openclaw chat4000 status                             # see current state
 openclaw chat4000 reset                              # wipe local state (destructive)
 
-# Pairing variants
-openclaw chat4000 pair --code DEMO-2346              # use a fixed code instead of a random one
-openclaw chat4000 pair-many --code DEMO-2346 --max 5 # continuous (review/demo mode)
+# Pairing variants — for human review/demo use only, NOT for AI-agent setups.
+# An AI agent must never set --code itself: shared codes race for the
+# wrapped group key. Let the system generate a random one.
+# openclaw chat4000 pair --code DEMO-2346              # fixed code (demo mode)
+# openclaw chat4000 pair-many --code DEMO-2346 --max 5 # continuous (App Store review mode)
 
 # Telemetry control (anonymous error reporting, on by default)
 openclaw chat4000 telemetry status
