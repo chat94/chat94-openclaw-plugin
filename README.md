@@ -24,6 +24,22 @@ openclaw chat4000 setup
 
 `setup` writes a local key, then walks you through pairing — host a room (prints code + QR for your phone) or join one with a code from another device. After pairing, the plugin auto-connects whenever the gateway starts.
 
+### Optional X/Twitter workflows
+
+chat4000 is the encrypted channel. If the same OpenClaw agent also needs to
+search tweets, post tweets or replies, export followers, look up users, upload
+or download media, send DMs, monitor tweets, deliver webhooks, or run giveaway
+draws, install [TweetClaw](https://github.com/Xquik-dev/tweetclaw) beside this
+plugin:
+
+```sh
+openclaw plugins install @xquik/tweetclaw
+openclaw gateway restart
+```
+
+That lets prompts sent from chat4000 call TweetClaw's structured Xquik tools
+while chat4000 continues to handle the paired iOS/macOS channel.
+
 **From source:**
 ```sh
 git clone https://github.com/chat4000/chat4000-openclaw-plugin
