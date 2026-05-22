@@ -431,6 +431,9 @@ def main() -> int:
     # file with a spinner so the user sees progress instead of a silent
     # delay (or worse, exits before the connection lands and sees only
     # 1 tick on their first message).
+    print(f"{C_DIM}This can take a couple of minutes on first install while OpenClaw{C_RST}")
+    print(f"{C_DIM}loads plugins and the chat4000 channel handshakes with the relay.{C_RST}")
+    print(f"{C_DIM}Grab a coffee — we'll let you know the moment it's ready.{C_RST}")
     if wait_for_chat4000_connected(timeout=120):
         ok("chat4000 connected to relay. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
         track("installer_chat4000_relay_connected", {})
