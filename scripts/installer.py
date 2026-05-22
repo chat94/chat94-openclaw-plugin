@@ -162,9 +162,9 @@ def detect_openclaw() -> Optional[tuple[str, str]]:
 
 def detect_restart_method() -> Optional[str]:
     """Return one of:
-      - 'openclaw-restart' (openclaw gateway restart exists and managed by launchd/systemd)
-      - 'docker'           (openclaw-gateway container running)
-      - None               (no automatic restart — user must do it manually)
+      - 'docker'              (openclaw-gateway container running)
+      - 'openclaw-supervised' (openclaw service is managed by launchd/systemd/schtasks)
+      - 'foreground'          (no supervisor — start with `gateway run --force` in background)
     """
     # Check docker first — if a container named openclaw-gateway is running,
     # `docker restart` is the unambiguous path.
@@ -179,11 +179,23 @@ def detect_restart_method() -> Optional[str]:
                 return "docker"
         except Exception:
             pass
-    # Otherwise, try `openclaw gateway restart` — it's idempotent for
-    # launchd / systemd / schtasks installs. For bare `openclaw gateway
-    # run` installs it'll print a "process not managed" message; we
-    # treat that as fall-through and tell the user.
-    return "openclaw-restart"
+    # Probe `openclaw gateway status` — if it reports a managed service,
+    # use `openclaw gateway restart`. Otherwise fall back to foreground.
+    openclaw = shutil.which("openclaw") or "openclaw"
+    try:
+        r = subprocess.run(
+            [openclaw, "gateway", "status"],
+            capture_output=True, text=True, timeout=5,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        if "service disabled" in out.lower() or "service is not installed" in out.lower():
+            return "foreground"
+        # Any other status output implies the supervisor is present.
+        if r.returncode == 0 and out.strip():
+            return "openclaw-supervised"
+    except Exception:
+        pass
+    return "foreground"
 
 # ─── Install steps ────────────────────────────────────────────────────────
 
@@ -213,6 +225,8 @@ def install_plugin(openclaw: str, force: bool) -> None:
 
 def restart_gateway(method: str) -> bool:
     """Returns True if a restart was actually issued."""
+    openclaw = shutil.which("openclaw") or "openclaw"
+
     if method == "docker":
         docker = shutil.which("docker")
         if not docker:
@@ -223,20 +237,58 @@ def restart_gateway(method: str) -> bool:
             warn(f"docker restart failed: {r.stderr.strip()[:200]}")
             return False
         return True
-    if method == "openclaw-restart":
-        openclaw = shutil.which("openclaw") or "openclaw"
+
+    if method == "openclaw-supervised":
         say(f"$ {openclaw} gateway restart")
         r = subprocess.run(
             [openclaw, "gateway", "restart"],
             capture_output=True, text=True,
         )
+        out = (r.stdout or "") + (r.stderr or "")
+        # The CLI returns 0 even when the service isn't installed — catch
+        # the actual "disabled" message and fall through to foreground.
+        if "service disabled" in out.lower():
+            warn("Gateway service is not installed under a supervisor — starting in foreground.")
+            return restart_gateway("foreground")
         if r.returncode == 0:
             return True
-        # Print whatever openclaw said so the user has context.
-        out = (r.stderr or r.stdout).strip()
-        if out:
-            warn(out[:500])
+        if out.strip():
+            warn(out.strip()[:500])
         return False
+
+    if method == "foreground":
+        # Bare host (container, raw `gateway run` in a terminal, etc.).
+        # Kill any existing gateway process and start a fresh one
+        # detached. `--force` makes the new gateway kick out a stale
+        # listener on port 18789 if pkill missed it.
+        log_path = "/tmp/openclaw-gateway.log"
+        try:
+            subprocess.run(
+                ["pkill", "-9", "-f", "openclaw gateway run"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
+        import time
+        time.sleep(0.5)
+        try:
+            logf = open(log_path, "ab")
+            subprocess.Popen(
+                [openclaw, "gateway", "run", "--force"],
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+            say(f"Started gateway in background. Log: {C_CYN}{log_path}{C_RST}")
+            # Wait briefly so the gateway has time to bind + load plugins
+            # before pair runs.
+            time.sleep(3)
+            return True
+        except Exception as exc:
+            warn(f"Could not start gateway: {exc}")
+            return False
+
     return False
 
 def verify_plugin_registered(openclaw: str) -> bool:
