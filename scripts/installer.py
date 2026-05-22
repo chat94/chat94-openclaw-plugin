@@ -425,15 +425,88 @@ def main() -> int:
         track("installer_gateway_restart_skipped", {"reason": "no_method"})
         return 1
 
-    # 6. Verify -------------------------------------------------------------
-    import time
-    time.sleep(2)
-    if verify_plugin_registered(openclaw_path):
-        ok("chat4000 plugin is live. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
+    # 6. Wait for chat4000 to actually connect to the relay -----------------
+    # The gateway takes ~30s to load all plugins and start channels. The
+    # chat4000 channel writes to runtime.log when it connects. Poll that
+    # file with a spinner so the user sees progress instead of a silent
+    # delay (or worse, exits before the connection lands and sees only
+    # 1 tick on their first message).
+    if wait_for_chat4000_connected(timeout=120):
+        ok("chat4000 connected to relay. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
+        track("installer_chat4000_relay_connected", {})
     else:
-        warn("Gateway started but `openclaw chat4000 status` failed — give it a few more seconds.")
-        warn(f"Watch logs: {C_CYN}tail -f /tmp/openclaw-gateway.log{C_RST}")
+        warn("chat4000 didn't connect within 120s.")
+        warn(f"Watch logs: {C_CYN}tail -f /root/.openclaw/plugins/chat4000/logs/runtime.log{C_RST}")
+        warn(f"            {C_CYN}tail -f /tmp/openclaw-gateway.log{C_RST}")
+        track("installer_chat4000_relay_timeout", {})
     return 0
+
+
+# ─── Spinner / wait helpers ───────────────────────────────────────────────
+
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+def wait_for_chat4000_connected(timeout: float = 120.0) -> bool:
+    """Poll the chat4000 runtime.log for `runtime.hello_ok` (which
+    indicates a successful relay handshake). Show a spinner with status
+    text. Returns True if connected within `timeout` seconds."""
+    import time as _time
+
+    runtime_log = Path.home() / ".openclaw" / "plugins" / "chat4000" / "logs" / "runtime.log"
+    gateway_log = Path("/tmp/openclaw-gateway.log")
+    deadline = _time.time() + timeout
+    started = _time.time()
+    frame_idx = 0
+    is_tty = sys.stdout.isatty()
+    last_status = ""
+
+    print()  # leading blank line
+
+    while _time.time() < deadline:
+        # Check chat4000 runtime log for relay handshake.
+        if runtime_log.exists():
+            try:
+                content = runtime_log.read_text(errors="ignore")
+                if "runtime.hello_ok" in content:
+                    if is_tty:
+                        sys.stdout.write("\r" + " " * 100 + "\r")
+                        sys.stdout.flush()
+                    return True
+            except Exception:
+                pass
+
+        # Render spinner — derive a coarse status from what we can see
+        # so far so the user knows WHAT we're waiting on.
+        status = "starting gateway"
+        if gateway_log.exists():
+            try:
+                gw = gateway_log.read_text(errors="ignore")
+                if "[gateway] ready" in gw or "starting channels and sidecars" in gw:
+                    status = "loading channels"
+                if "[chat4000]" in gw and "Starting chat4000" in gw:
+                    status = "chat4000 channel starting"
+                if runtime_log.exists():
+                    status = "chat4000 connecting to relay"
+            except Exception:
+                pass
+
+        if is_tty:
+            elapsed = int(_time.time() - started)
+            frame = SPINNER_FRAMES[frame_idx % len(SPINNER_FRAMES)]
+            line = f"\r{C_CYN}{frame}{C_RST}  {C_BOLD}{status}{C_RST}{C_DIM}  ({elapsed}s){C_RST}"
+            # Pad to overwrite any longer previous line cleanly.
+            pad = max(0, len(last_status) - len(line))
+            sys.stdout.write(line + (" " * pad))
+            sys.stdout.flush()
+            last_status = line
+        _time.sleep(0.1)
+        frame_idx += 1
+
+    if is_tty:
+        sys.stdout.write("\r" + " " * 100 + "\r")
+        sys.stdout.flush()
+    return False
 
 if __name__ == "__main__":
     sys.exit(main())
