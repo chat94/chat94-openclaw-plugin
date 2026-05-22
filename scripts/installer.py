@@ -97,6 +97,11 @@ POSTHOG_CAPTURE_URL = f"{POSTHOG_HOST}/capture/"
 SENTRY_DSN = "https://ca71dd0ea0a2740ec9ced9774c780197@o4511305222193152.ingest.us.sentry.io/4511305367289856"
 INSTALLER_RELEASE = "chat4000-openclaw-plugin-installer@1.0.0"
 
+import platform
+import time
+
+_STARTED_AT_MS = int(time.time() * 1000)
+
 # ─── ANSI ─────────────────────────────────────────────────────────────────
 
 if sys.stdout.isatty():
@@ -155,7 +160,7 @@ _TELEMETRY_DISABLED = (
     or "--no-telemetry" in sys.argv
 )
 
-def track(event: str, props: Optional[dict] = None) -> None:
+def _emit(event: str, props: Optional[dict] = None) -> None:
     if _TELEMETRY_DISABLED:
         return
     enriched = {
@@ -164,7 +169,61 @@ def track(event: str, props: Optional[dict] = None) -> None:
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "os_platform": sys.platform,
         "session_id": _SESSION_ID,
+        "arch": platform.machine() or "unknown",
+        "cpu_count": os.cpu_count() or 0,
+        "locale": (os.environ.get("LANG") or "").split(".")[0] or "unknown",
+        "since_start_ms": int(time.time() * 1000) - _STARTED_AT_MS,
+        "is_root": hasattr(os, "geteuid") and os.geteuid() == 0,
     }
+    try:
+        sysname = platform.system()
+        if sysname == "Linux":
+            os_rel = f"Linux {platform.release()}"
+            try:
+                for line in Path("/etc/os-release").read_text(errors="ignore").splitlines():
+                    if line.startswith("PRETTY_NAME="):
+                        os_rel = line.split("=", 1)[1].strip().strip('"')
+                        break
+            except Exception:
+                pass
+            enriched["os_release"] = os_rel
+        elif sysname == "Darwin":
+            mv = platform.mac_ver()[0]
+            enriched["os_release"] = f"macOS {mv}" if mv else f"Darwin {platform.release()}"
+        elif sysname == "Windows":
+            wv = platform.win32_ver()[0]
+            enriched["os_release"] = f"Windows {wv}" if wv else "Windows"
+        else:
+            enriched["os_release"] = f"{sysname} {platform.release()}".strip()
+    except Exception:
+        enriched["os_release"] = "unknown"
+    try:
+        in_container = False
+        if Path("/.dockerenv").exists() or os.environ.get("KUBERNETES_SERVICE_HOST"):
+            in_container = True
+        else:
+            cgroup = Path("/proc/1/cgroup").read_text(errors="ignore")
+            in_container = any(s in cgroup for s in ("docker", "kubepods", "containerd", "podman"))
+        enriched["is_container"] = in_container
+    except Exception:
+        enriched["is_container"] = False
+    try:
+        argv_out, skip_next = [], False
+        for a in sys.argv[1:]:
+            if skip_next:
+                argv_out.append("<redacted>"); skip_next = False; continue
+            if "=" in a:
+                k = a.partition("=")[0]
+                if any(s in k.lower() for s in ("token", "key", "secret", "pass", "dsn")):
+                    argv_out.append(f"{k}=<redacted>"); continue
+            if a.startswith(("sk-", "phc_", "ghp_", "Bearer")):
+                argv_out.append("<redacted>"); continue
+            if a in ("--token", "--api-key", "--secret", "--password", "--dsn"):
+                argv_out.append(a); skip_next = True; continue
+            argv_out.append(a)
+        enriched["flags"] = argv_out
+    except Exception:
+        pass
     if props:
         enriched.update(props)
     body = json.dumps({
@@ -345,29 +404,40 @@ def detect_restart_method() -> Optional[str]:
 
 # ─── Install steps ────────────────────────────────────────────────────────
 
-def install_plugin(openclaw: str, force: bool) -> None:
+def install_plugin(openclaw: str, force: bool) -> tuple:
     """Try `openclaw plugins install` (plural, current) first; fall back
-    to `openclaw plugin install` (singular, older). Both forms exist
-    depending on the OpenClaw version."""
+    to `openclaw plugin install` (singular, older). Returns
+    (success, output_tail). output_tail is empty on success and the last
+    ~512 chars of combined stdout/stderr on failure."""
     base_cmds = [
         [openclaw, "plugins", "install", NPM_PACKAGE],   # canonical (2026.4+)
         [openclaw, "plugin", "install", NPM_PACKAGE],    # legacy
     ]
-    last_exc: Optional[subprocess.CalledProcessError] = None
+    last_tail = ""
     for cmd in base_cmds:
         if force:
             cmd = cmd[:3] + ["--force"] + cmd[3:]
         say(f"$ {' '.join(cmd)}")
-        try:
-            subprocess.run(cmd, check=True)
-            return
-        except subprocess.CalledProcessError as exc:
-            last_exc = exc
-            # If openclaw said "unknown command", try the other shape.
-            # Anything else is a real install failure — bail immediately.
-            continue
-    if last_exc is not None:
-        raise last_exc
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        buf: list = []
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                buf.append(line)
+        rc = proc.wait()
+        if rc == 0:
+            return True, ""
+        last_tail = "".join(buf)[-512:]
+        # Loop to try the legacy `plugin install` form; if both fail
+        # we fall out with the most recent tail.
+    return False, _scrub_secrets(last_tail) if last_tail else ""
 
 def restart_gateway(method: str) -> bool:
     """Returns True if a restart was actually issued."""
@@ -483,18 +553,18 @@ def main() -> int:
     args = parser.parse_args()
 
     banner()
-    track("installer_started")
+    _emit("installer_started")
 
     # 1. Detect openclaw ----------------------------------------------------
     detected = detect_openclaw()
     if detected is None:
         err("OpenClaw not found on PATH. Install OpenClaw first, then re-run.")
         err("  Docs: https://openclaw.com/install")
-        track("installer_failed", {"stage": "detect_openclaw", "error_class": "NotFound"})
+        _emit("installer_failed", {"stage": "detect_openclaw", "error_class": "NotFound"})
         return 1
     openclaw_path, openclaw_version = detected
     ok(f"OpenClaw:  {C_CYN}{openclaw_path}{C_RST}  {C_DIM}({openclaw_version}){C_RST}")
-    track("installer_openclaw_detected", {"openclaw_version": openclaw_version, "openclaw_path": openclaw_path})
+    _emit("installer_openclaw_detected", {"openclaw_version": openclaw_version, "openclaw_path": openclaw_path})
 
     # 2. Reset mode ---------------------------------------------------------
     if args.reset:
@@ -503,22 +573,22 @@ def main() -> int:
 
     # 3. Install ------------------------------------------------------------
     hdr(f"📦 Installing {NPM_PACKAGE} into OpenClaw")
-    try:
-        install_plugin(openclaw_path, force=args.force)
-    except subprocess.CalledProcessError as exc:
-        err(f"`openclaw plugin install` exited {exc.returncode}.")
+    success, output_tail = install_plugin(openclaw_path, force=args.force)
+    if not success:
+        err(f"`openclaw plugins install` failed.")
         err("Common causes:")
         err("  - npm registry unreachable from this host (proxy / offline)")
-        err(f"  - The OpenClaw on this host doesn't support `plugin install` — try `{openclaw_path} --help`")
+        err(f"  - The OpenClaw on this host doesn't support `plugins install` — try `{openclaw_path} --help`")
         err("  - Permissions on the OpenClaw plugins directory")
-        track("installer_failed", {
+        _emit("installer_failed", {
             "stage": "plugin_install",
-            "error_class": type(exc).__name__,
-            "error_msg": str(exc)[:200],
+            "error_class": "InstallFailed",
+            "error_msg": output_tail[:200] or "no output",
+            "output_tail": output_tail,
         })
         return 1
     ok("Plugin installed.")
-    track("installer_pkg_installed", {"plugin_package": NPM_PACKAGE})
+    _emit("installer_pkg_installed", {"plugin_package": NPM_PACKAGE})
 
     # 4. Pair --------------------------------------------------------------
     # Pair runs BEFORE the gateway restart. Pair talks to the relay
@@ -539,18 +609,18 @@ def main() -> int:
     hdr("📱 Pairing a device")
     print(f"{C_DIM}Scan the QR with the chat4000 iOS/macOS app, or paste the code into the CLI client.{C_RST}")
     print(f"{C_DIM}Press Ctrl-C any time to cancel.{C_RST}\n")
-    track("installer_handing_off_to_pair")
+    _emit("installer_handing_off_to_pair")
     try:
         pair_rc = subprocess.run([openclaw_path, "chat4000", "pair"]).returncode
     except KeyboardInterrupt:
         warn("Pairing cancelled.")
-        track("installer_cancelled", {"stage": "pair"})
+        _emit("installer_cancelled", {"stage": "pair"})
         return 130
     if pair_rc != 0:
         err(f"Pairing exited {pair_rc}.")
-        track("installer_failed", {"stage": "pair", "exit_code": pair_rc})
+        _emit("installer_failed", {"stage": "pair", "exit_code": pair_rc})
         return pair_rc
-    track("pairing_completed_via_installer", {})
+    _emit("pairing_completed_via_installer", {})
 
     # 5. (Re)start gateway — now chat4000 has a key + config ----------------
     if args.no_restart:
@@ -563,13 +633,13 @@ def main() -> int:
     method = detect_restart_method()
     if method is not None and restart_gateway(method):
         ok(f"Gateway started (method: {method}).")
-        track("installer_gateway_restarted", {"method": method})
+        _emit("installer_gateway_restarted", {"method": method})
     else:
         warn("Could not auto-start the gateway.")
         warn("If you run OpenClaw under Docker: docker restart openclaw-gateway")
         warn("If you run `openclaw gateway run` in a terminal: start it now.")
         warn("If you run under launchd / systemd: try `openclaw gateway start`.")
-        track("installer_failed", {
+        _emit("installer_failed", {
             "stage": "gateway_restart",
             "error_class": "RestartUnavailable",
             "error_msg": f"no working method (probed: {method or 'none'})",
@@ -587,18 +657,18 @@ def main() -> int:
     print(f"{C_DIM}Grab a coffee — we'll let you know the moment it's ready.{C_RST}")
     if wait_for_chat4000_connected(timeout=120):
         ok("chat4000 connected to relay. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
-        track("installer_succeeded", {})
-        track("installer_chat4000_relay_connected", {})
+        _emit("installer_succeeded", {})
+        _emit("installer_chat4000_relay_connected", {})
         return 0
     warn("chat4000 didn't connect within 120s.")
     warn(f"Watch logs: {C_CYN}tail -f /root/.openclaw/plugins/chat4000/logs/runtime.log{C_RST}")
     warn(f"            {C_CYN}tail -f /tmp/openclaw-gateway.log{C_RST}")
-    track("installer_failed", {
+    _emit("installer_failed", {
         "stage": "relay_handshake",
         "error_class": "Timeout",
         "error_msg": "no runtime.hello_ok within 120s",
     })
-    track("installer_chat4000_relay_timeout", {})
+    _emit("installer_chat4000_relay_timeout", {})
     return 1
 
 
@@ -683,7 +753,7 @@ def _entry() -> int:
         raise
     except BaseException as exc:
         err(f"Installer crashed unexpectedly: {type(exc).__name__}: {exc}")
-        track("installer_crashed", {
+        _emit("installer_crashed", {
             "error_class": type(exc).__name__,
             "error_msg": str(exc)[:200],
         })
