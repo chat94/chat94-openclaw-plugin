@@ -2,6 +2,43 @@
 """installer.py — installs the chat4000 OpenClaw plugin from npm,
 restarts the OpenClaw gateway, and starts a pairing session.
 
+────────────────────────────────────────────────────────────────────────
+A note about the telemetry in this file, from us at chat4000:
+
+We send anonymous events to PostHog (product analytics) and Sentry
+(uncaught crashes) FROM THE INSTALLER ITSELF. We do this so that:
+
+  - we can see what % of installs succeed end-to-end (PostHog funnel)
+  - we can see which step fails most often (gateway restart? pip?
+    npm registry timeout? relay handshake?)
+  - we get a real stack trace when the installer crashes in a way we
+    didn't anticipate (Sentry), so we can fix it without you having
+    to file a bug
+
+Things we NEVER send:
+  - your message content, prompts, command arguments, env vars
+  - pairing codes, group keys, anything from `keys/default.json`
+  - usernames or anything else identifying
+
+What WE send is bounded to:
+  - which install step ran / failed, and the error class name
+  - python + openclaw version, OS platform
+  - an anonymous UUID (~/.config/chat4000/install-id) so we can tell
+    one failed install retrying from many people each failing once
+
+We're not trying to spy on you. We just want to ship a installer that
+works for everyone, and the only way to know it's working is to
+measure it. Opt out any of three ways:
+  • CHAT4000_TELEMETRY_DISABLED=1 in your env
+  • pass --no-telemetry on the curl|bash line
+  • after install: `openclaw chat4000 telemetry disable`
+
+Privacy policy: https://chat4000.com/privacy
+Source: https://github.com/chat4000/chat4000-openclaw-plugin
+Love, chat4000 ❤️
+────────────────────────────────────────────────────────────────────────
+
+
 Pure stdlib. Designed to be downloaded by install.sh and executed as a
 one-shot. ANSI colors, no third-party deps (PostHog events use stdlib
 HTTPS, not the SDK).
@@ -53,6 +90,12 @@ NPM_PACKAGE = "@chat4000/openclaw-plugin"
 POSTHOG_API_KEY = "phc_s49DnTamyFDnEC6MyumNmmjjf7p455LXCVzPE94hPemZ"
 POSTHOG_HOST = "https://us.i.posthog.com"
 POSTHOG_CAPTURE_URL = f"{POSTHOG_HOST}/capture/"
+
+# Sentry DSN matching the OpenClaw plugin's own runtime telemetry — so
+# installer crashes land in the same project as plugin-runtime crashes.
+# DSN is public-by-design (write-only ingestion endpoint, not a secret).
+SENTRY_DSN = "https://ca71dd0ea0a2740ec9ced9774c780197@o4511305222193152.ingest.us.sentry.io/4511305367289856"
+INSTALLER_RELEASE = "chat4000-openclaw-plugin-installer@1.0.0"
 
 # ─── ANSI ─────────────────────────────────────────────────────────────────
 
@@ -140,6 +183,109 @@ def track(event: str, props: Optional[dict] = None) -> None:
         urllib.request.urlopen(req, timeout=3).read()
     except Exception:
         pass
+
+# ─── Sentry (stdlib envelope POST, no SDK) ────────────────────────────────
+
+
+def _scrub_path(s: str) -> str:
+    """Replace home + /Users/<name>/ etc with anonymized placeholders."""
+    if not isinstance(s, str):
+        return s
+    home = str(Path.home())
+    if home and home in s:
+        s = s.replace(home, "~")
+    import re as _re
+    return _re.sub(r"/(Users|home)/[^/]+", r"/\\1/<user>", s)
+
+
+def _scrub_secrets(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    import re as _re
+    s = _re.sub(r"sk-[A-Za-z0-9]{20,}", "[REDACTED_API_KEY]", s)
+    s = _re.sub(r"phc_[A-Za-z0-9]{30,}", "[REDACTED_POSTHOG_KEY]", s)
+    s = _re.sub(r"(?i)Bearer\\s+[A-Za-z0-9._-]+", "Bearer [REDACTED]", s)
+    return s
+
+
+def send_sentry_envelope(exc: BaseException, *, tags: Optional[dict] = None) -> None:
+    """Post a Sentry envelope describing `exc` over plain HTTPS. Stdlib
+    only — no sentry-sdk needed in the install bootstrap. Best-effort:
+    never raises. Strips home paths and obvious secrets before sending."""
+    if _TELEMETRY_DISABLED:
+        return
+    try:
+        import traceback
+        import datetime
+        from urllib.parse import urlparse
+
+        parsed = urlparse(SENTRY_DSN)
+        public_key = parsed.username or ""
+        project_id = (parsed.path or "").lstrip("/")
+        if not public_key or not project_id or not parsed.hostname:
+            return
+        envelope_url = f"{parsed.scheme}://{parsed.hostname}/api/{project_id}/envelope/"
+
+        frames = []
+        tb = exc.__traceback__
+        while tb is not None:
+            f = tb.tb_frame
+            co = f.f_code
+            frames.append({
+                "filename": _scrub_path(co.co_filename),
+                "function": co.co_name,
+                "lineno": tb.tb_lineno,
+                "module": co.co_name,
+                "in_app": "installer.py" in co.co_filename,
+            })
+            tb = tb.tb_next
+
+        event = {
+            "event_id": uuid.uuid4().hex,
+            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "platform": "python",
+            "level": "error",
+            "release": INSTALLER_RELEASE,
+            "environment": os.environ.get("HERMES_ENV") or "production",
+            "tags": {
+                "installer": "openclaw",
+                "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+                "os_platform": sys.platform,
+                **(tags or {}),
+            },
+            "exception": {
+                "values": [{
+                    "type": type(exc).__name__,
+                    "value": _scrub_secrets(str(exc))[:500],
+                    "stacktrace": {"frames": frames},
+                }]
+            },
+            "user": {"id": resolve_install_id()},
+            "sdk": {"name": "chat4000-installer", "version": "1.0.0"},
+        }
+
+        envelope_header = json.dumps({"dsn": SENTRY_DSN, "event_id": event["event_id"]})
+        item_header = json.dumps({"type": "event"})
+        item_payload = json.dumps(event)
+        body = (envelope_header + "\n" + item_header + "\n" + item_payload + "\n").encode("utf-8")
+
+        req = urllib.request.Request(
+            envelope_url,
+            data=body,
+            headers={
+                "Content-Type": "application/x-sentry-envelope",
+                "X-Sentry-Auth": (
+                    f"Sentry sentry_version=7, sentry_key={public_key}, "
+                    f"sentry_client=chat4000-installer/1.0"
+                ),
+            },
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        # Telemetry must never break installs.
+        pass
+
 
 # ─── Detection ────────────────────────────────────────────────────────────
 
@@ -398,6 +544,7 @@ def main() -> int:
         pair_rc = subprocess.run([openclaw_path, "chat4000", "pair"]).returncode
     except KeyboardInterrupt:
         warn("Pairing cancelled.")
+        track("installer_cancelled", {"stage": "pair"})
         return 130
     if pair_rc != 0:
         err(f"Pairing exited {pair_rc}.")
@@ -422,7 +569,11 @@ def main() -> int:
         warn("If you run OpenClaw under Docker: docker restart openclaw-gateway")
         warn("If you run `openclaw gateway run` in a terminal: start it now.")
         warn("If you run under launchd / systemd: try `openclaw gateway start`.")
-        track("installer_gateway_restart_skipped", {"reason": "no_method"})
+        track("installer_failed", {
+            "stage": "gateway_restart",
+            "error_class": "RestartUnavailable",
+            "error_msg": f"no working method (probed: {method or 'none'})",
+        })
         return 1
 
     # 6. Wait for chat4000 to actually connect to the relay -----------------
@@ -436,13 +587,19 @@ def main() -> int:
     print(f"{C_DIM}Grab a coffee — we'll let you know the moment it's ready.{C_RST}")
     if wait_for_chat4000_connected(timeout=120):
         ok("chat4000 connected to relay. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
+        track("installer_succeeded", {})
         track("installer_chat4000_relay_connected", {})
-    else:
-        warn("chat4000 didn't connect within 120s.")
-        warn(f"Watch logs: {C_CYN}tail -f /root/.openclaw/plugins/chat4000/logs/runtime.log{C_RST}")
-        warn(f"            {C_CYN}tail -f /tmp/openclaw-gateway.log{C_RST}")
-        track("installer_chat4000_relay_timeout", {})
-    return 0
+        return 0
+    warn("chat4000 didn't connect within 120s.")
+    warn(f"Watch logs: {C_CYN}tail -f /root/.openclaw/plugins/chat4000/logs/runtime.log{C_RST}")
+    warn(f"            {C_CYN}tail -f /tmp/openclaw-gateway.log{C_RST}")
+    track("installer_failed", {
+        "stage": "relay_handshake",
+        "error_class": "Timeout",
+        "error_msg": "no runtime.hello_ok within 120s",
+    })
+    track("installer_chat4000_relay_timeout", {})
+    return 1
 
 
 # ─── Spinner / wait helpers ───────────────────────────────────────────────
@@ -511,5 +668,30 @@ def wait_for_chat4000_connected(timeout: float = 120.0) -> bool:
         sys.stdout.flush()
     return False
 
+def _entry() -> int:
+    """Top-level wrapper that reports uncaught exceptions to Sentry.
+
+    Keeps Ctrl-C (KeyboardInterrupt) silent — that's a user action, not
+    a bug. Everything else: report + print a friendly message + exit 1."""
+    try:
+        return main()
+    except KeyboardInterrupt:
+        print()
+        warn("Install cancelled.")
+        return 130
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        err(f"Installer crashed unexpectedly: {type(exc).__name__}: {exc}")
+        track("installer_crashed", {
+            "error_class": type(exc).__name__,
+            "error_msg": str(exc)[:200],
+        })
+        send_sentry_envelope(exc, tags={"crash_stage": "uncaught"})
+        err("Crash report sent. If this keeps happening, please open an issue:")
+        err("  https://github.com/chat4000/chat4000-openclaw-plugin/issues")
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_entry())
