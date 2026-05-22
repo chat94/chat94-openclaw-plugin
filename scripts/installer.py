@@ -374,48 +374,66 @@ def main() -> int:
     ok("Plugin installed.")
     track("installer_pkg_installed", {"plugin_package": NPM_PACKAGE})
 
-    # 4. Restart gateway ----------------------------------------------------
-    if args.no_restart:
-        warn("Skipping gateway restart (--no-restart).")
-        warn("The plugin is installed but NOT loaded until the gateway restarts.")
-    else:
-        hdr("🔁 Restarting OpenClaw gateway")
-        method = detect_restart_method()
-        restarted = False
-        if method is not None:
-            restarted = restart_gateway(method)
-        if restarted:
-            ok(f"Gateway restarted via {method}.")
-            track("installer_gateway_restarted", {"method": method})
-            # Give the gateway a moment to re-register plugins.
-            import time
-            time.sleep(2)
-        else:
-            warn("Could not auto-restart the gateway.")
-            warn("If you run OpenClaw under Docker: docker restart openclaw-gateway")
-            warn("If you run `openclaw gateway run` in a terminal: Ctrl-C it and start again.")
-            warn("If you run under launchd / systemd: try `openclaw gateway restart`.")
-            track("installer_gateway_restart_skipped", {"reason": "no_method"})
-
-    # 5. Verify the plugin is registered ------------------------------------
-    if verify_plugin_registered(openclaw_path):
-        ok("Plugin registered (`openclaw chat4000 status` works).")
-    else:
-        warn("`openclaw chat4000 status` failed — the gateway may still be starting up.")
-        warn("If this persists, restart the gateway manually and re-run pair.")
-
-    # 6. Pair --------------------------------------------------------------
+    # 4. Pair --------------------------------------------------------------
+    # Pair runs BEFORE the gateway restart. Pair talks to the relay
+    # directly (no gateway needed) and mints the key + writes the
+    # channels.chat4000 config. The subsequent gateway (re)start picks
+    # up both atomically: it boots with the chat4000 channel marked
+    # configured, loads the adapter, and connects to the relay. Doing
+    # this in the reverse order (gw → pair) doesn't work because the
+    # gateway only loads channel adapters at boot — its config-watcher
+    # reload doesn't promote a never-loaded channel from
+    # configured:no → running.
     if args.no_pair:
         warn("Skipping pair (--no-pair). When ready, run:")
         print(f"  {C_CYN}{openclaw_path} chat4000 pair{C_RST}")
+        print(f"  {C_CYN}{openclaw_path} gateway run    # in a separate terminal{C_RST}")
         return 0
 
     hdr("📱 Pairing a device")
     print(f"{C_DIM}Scan the QR with the chat4000 iOS/macOS app, or paste the code into the CLI client.{C_RST}")
     print(f"{C_DIM}Press Ctrl-C any time to cancel.{C_RST}\n")
     track("installer_handing_off_to_pair")
-    # exec so pair owns the real tty — user can Ctrl-C cleanly.
-    os.execv(openclaw_path, [openclaw_path, "chat4000", "pair"])
+    try:
+        pair_rc = subprocess.run([openclaw_path, "chat4000", "pair"]).returncode
+    except KeyboardInterrupt:
+        warn("Pairing cancelled.")
+        return 130
+    if pair_rc != 0:
+        err(f"Pairing exited {pair_rc}.")
+        track("installer_failed", {"stage": "pair", "exit_code": pair_rc})
+        return pair_rc
+    track("pairing_completed_via_installer", {})
+
+    # 5. (Re)start gateway — now chat4000 has a key + config ----------------
+    if args.no_restart:
+        warn("Skipping gateway restart (--no-restart).")
+        warn("Plugin is paired but messages won't flow until you restart the gateway:")
+        print(f"  {C_CYN}{openclaw_path} gateway run{C_RST}")
+        return 0
+
+    hdr("🔁 Starting OpenClaw gateway")
+    method = detect_restart_method()
+    if method is not None and restart_gateway(method):
+        ok(f"Gateway started (method: {method}).")
+        track("installer_gateway_restarted", {"method": method})
+    else:
+        warn("Could not auto-start the gateway.")
+        warn("If you run OpenClaw under Docker: docker restart openclaw-gateway")
+        warn("If you run `openclaw gateway run` in a terminal: start it now.")
+        warn("If you run under launchd / systemd: try `openclaw gateway start`.")
+        track("installer_gateway_restart_skipped", {"reason": "no_method"})
+        return 1
+
+    # 6. Verify -------------------------------------------------------------
+    import time
+    time.sleep(2)
+    if verify_plugin_registered(openclaw_path):
+        ok("chat4000 plugin is live. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
+    else:
+        warn("Gateway started but `openclaw chat4000 status` failed — give it a few more seconds.")
+        warn(f"Watch logs: {C_CYN}tail -f /tmp/openclaw-gateway.log{C_RST}")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
