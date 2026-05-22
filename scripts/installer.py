@@ -32,6 +32,16 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+# Make stdout/stderr line-buffered so the running output stays in order
+# when piped through `docker exec` / `ssh` — otherwise subprocess stderr
+# (immediate) prints before our buffered stdout (`print(...)`), giving
+# misleading "error before banner" output.
+try:
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+except Exception:
+    pass
+
 # ─── Constants ────────────────────────────────────────────────────────────
 
 REPO_URL = "https://github.com/chat4000/chat4000-openclaw-plugin"
