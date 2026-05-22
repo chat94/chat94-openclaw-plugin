@@ -348,17 +348,52 @@ def send_sentry_envelope(exc: BaseException, *, tags: Optional[dict] = None) -> 
 
 # ─── Detection ────────────────────────────────────────────────────────────
 
+# Known OpenClaw binary locations, in priority order. Globs are expanded.
+OPENCLAW_LOCATIONS = [
+    "/usr/local/bin/openclaw",                              # Docker / Linux npm-root / Intel brew
+    "/opt/homebrew/bin/openclaw",                           # Apple Silicon Homebrew
+    "/home/linuxbrew/.linuxbrew/bin/openclaw",              # Linuxbrew
+    "~/.openclaw/bin/openclaw",                             # install-cli.sh local prefix
+    "~/.local/bin/openclaw",                                # source install / install.sh --install-method git
+    "~/.npm-global/bin/openclaw",                           # user-prefixed npm
+    "/usr/bin/openclaw",                                    # NodeSource-managed npm global
+    "/Applications/OpenClaw.app/Contents/Resources/cli/openclaw",  # macOS .app
+    "~/.nvm/versions/node/*/bin/openclaw",                  # nvm
+    "~/.nix-profile/bin/openclaw",                          # Nix
+    "/run/current-system/sw/bin/openclaw",                  # NixOS
+]
+
+
 def detect_openclaw() -> Optional[tuple[str, str]]:
-    """Return (openclaw_path, version) or None."""
+    """Return (openclaw_path, version) or None.
+
+    Probes in order: shutil.which → known locations (glob-aware).
+    Skips Node binary itself."""
     path = shutil.which("openclaw")
     if not path:
-        return None
+        for pattern in OPENCLAW_LOCATIONS:
+            expanded = str(Path(pattern).expanduser())
+            if "*" in expanded:
+                try:
+                    for match in sorted(Path("/").glob(expanded.lstrip("/")), reverse=True):
+                        if match.exists() and os.access(match, os.X_OK):
+                            path = str(match)
+                            break
+                except Exception:
+                    continue
+                if path:
+                    break
+            else:
+                if Path(expanded).exists() and os.access(expanded, os.X_OK):
+                    path = expanded
+                    break
+        if not path:
+            return None
     try:
         out = subprocess.run(
             [path, "--version"], capture_output=True, text=True, timeout=10,
         )
         version_line = (out.stdout or out.stderr).strip().splitlines()[0] if (out.stdout or out.stderr) else "unknown"
-        # Strip "OpenClaw " prefix if present
         m = re.search(r"\b(\d+\.\d+\.\d+\S*)", version_line)
         version = m.group(1) if m else version_line
     except Exception:
@@ -550,20 +585,110 @@ def main() -> int:
                         help="pass --force to `openclaw plugin install` (re-install in place)")
     parser.add_argument("--no-telemetry", action="store_true",
                         help="disable PostHog + Sentry for this run")
+    parser.add_argument("--openclaw-bin", default=None,
+                        metavar="PATH",
+                        help=(
+                            "Skip auto-detection and use this `openclaw` binary "
+                            "directly. PATH should be the full path to the openclaw "
+                            "executable (e.g. /opt/homebrew/bin/openclaw)."
+                        ))
     args = parser.parse_args()
 
     banner()
     _emit("installer_started")
 
     # 1. Detect openclaw ----------------------------------------------------
-    detected = detect_openclaw()
-    if detected is None:
-        err("OpenClaw not found on PATH. Install OpenClaw first, then re-run.")
-        err("  Docs: https://openclaw.com/install")
-        _emit("installer_failed", {"stage": "detect_openclaw", "error_class": "NotFound"})
-        return 1
-    openclaw_path, openclaw_version = detected
-    ok(f"OpenClaw:  {C_CYN}{openclaw_path}{C_RST}  {C_DIM}({openclaw_version}){C_RST}")
+    openclaw_path = None
+    openclaw_version = "unknown"
+    if args.openclaw_bin:
+        candidate = str(Path(args.openclaw_bin).expanduser())
+        if not (Path(candidate).exists() and os.access(candidate, os.X_OK)):
+            err(f"--openclaw-bin {candidate}: not an executable file.")
+            _emit("installer_failed", {
+                "stage": "detect_openclaw",
+                "error_class": "InvalidOpenclawBin",
+                "error_msg": f"not executable: {candidate}",
+            })
+            return 1
+        openclaw_path = candidate
+        try:
+            out = subprocess.run([openclaw_path, "--version"], capture_output=True, text=True, timeout=10)
+            line = (out.stdout or out.stderr).strip().splitlines()[0] if (out.stdout or out.stderr) else "unknown"
+            m = re.search(r"\b(\d+\.\d+\.\d+\S*)", line)
+            openclaw_version = m.group(1) if m else line
+        except Exception:
+            pass
+        ok(f"OpenClaw:  {C_CYN}{openclaw_path}{C_RST}  {C_DIM}({openclaw_version}, via --openclaw-bin){C_RST}")
+    else:
+        detected = detect_openclaw()
+        if detected is not None:
+            openclaw_path, openclaw_version = detected
+            ok(f"OpenClaw:  {C_CYN}{openclaw_path}{C_RST}  {C_DIM}({openclaw_version}){C_RST}")
+        else:
+            print()
+            err("Hey — we couldn't find where you installed OpenClaw.")
+            print()
+            print(f"We looked here:")
+            print(f"  · {C_CYN}openclaw{C_RST} on PATH")
+            for pattern in OPENCLAW_LOCATIONS:
+                print(f"  · {pattern}")
+            print()
+            print(f"{C_BOLD}Tell us where it is, or cancel:{C_RST}")
+            print(f"  · type the full path to the {C_CYN}openclaw{C_RST} executable")
+            print(f"  · or press {C_CYN}Ctrl+C{C_RST} to cancel and re-run with arguments")
+            print()
+            print(f"{C_BOLD}Examples of a valid path:{C_RST}")
+            print(f"  /opt/homebrew/bin/openclaw")
+            print(f"  /Applications/OpenClaw.app/Contents/Resources/cli/openclaw")
+            print(f"  ~/.nvm/versions/node/v22.19.0/bin/openclaw")
+            print()
+            print(f"{C_BOLD}Or re-run from your shell:{C_RST}")
+            print(f"  {C_CYN}curl ... | bash -s -- --openclaw-bin /your/path/to/openclaw{C_RST}")
+            print(f"  {C_CYN}curl ... | bash -s -- --help{C_RST}  {C_DIM}(see all flags){C_RST}")
+            print()
+            if not sys.stdin.isatty():
+                err("(non-interactive shell — cannot prompt. Re-run interactively or pass --openclaw-bin.)")
+                _emit("installer_failed", {
+                    "stage": "detect_openclaw",
+                    "error_class": "NotFound",
+                    "error_msg": "no openclaw on PATH; non-interactive shell",
+                })
+                return 1
+            try:
+                user_input = input(f"{C_CYN}? OpenClaw executable path:{C_RST} ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                warn("Cancelled.")
+                _emit("installer_cancelled", {"stage": "detect_openclaw_prompt"})
+                return 130
+            if not user_input:
+                err("Empty path. Bailing.")
+                _emit("installer_failed", {
+                    "stage": "detect_openclaw",
+                    "error_class": "NotFound",
+                    "error_msg": "no openclaw on PATH; empty user input",
+                })
+                return 1
+            candidate = str(Path(user_input).expanduser())
+            if not (Path(candidate).exists() and os.access(candidate, os.X_OK)):
+                err(f"{candidate} is not an executable file. Bailing.")
+                _emit("installer_failed", {
+                    "stage": "detect_openclaw",
+                    "error_class": "InvalidUserInput",
+                    "error_msg": f"not executable: {candidate}",
+                    "user_input_path": candidate,
+                })
+                return 1
+            openclaw_path = candidate
+            try:
+                out = subprocess.run([openclaw_path, "--version"], capture_output=True, text=True, timeout=10)
+                line = (out.stdout or out.stderr).strip().splitlines()[0] if (out.stdout or out.stderr) else "unknown"
+                m = re.search(r"\b(\d+\.\d+\.\d+\S*)", line)
+                openclaw_version = m.group(1) if m else line
+            except Exception:
+                pass
+            ok(f"OpenClaw:  {C_CYN}{openclaw_path}{C_RST}  {C_DIM}({openclaw_version}, via user input){C_RST}")
+            _emit("installer_openclaw_path_via_user_input", {"openclaw_path": openclaw_path})
     _emit("installer_openclaw_detected", {"openclaw_version": openclaw_version, "openclaw_path": openclaw_path})
 
     # 2. Reset mode ---------------------------------------------------------
