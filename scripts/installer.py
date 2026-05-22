@@ -178,12 +178,28 @@ def detect_restart_method() -> Optional[str]:
 # ─── Install steps ────────────────────────────────────────────────────────
 
 def install_plugin(openclaw: str, force: bool) -> None:
-    cmd = [openclaw, "plugin", "install", NPM_PACKAGE]
-    if force:
-        # `--force` lets us re-install / upgrade in place.
-        cmd.insert(2, "--force")
-    say(f"$ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    """Try `openclaw plugins install` (plural, current) first; fall back
+    to `openclaw plugin install` (singular, older). Both forms exist
+    depending on the OpenClaw version."""
+    base_cmds = [
+        [openclaw, "plugins", "install", NPM_PACKAGE],   # canonical (2026.4+)
+        [openclaw, "plugin", "install", NPM_PACKAGE],    # legacy
+    ]
+    last_exc: Optional[subprocess.CalledProcessError] = None
+    for cmd in base_cmds:
+        if force:
+            cmd = cmd[:3] + ["--force"] + cmd[3:]
+        say(f"$ {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True)
+            return
+        except subprocess.CalledProcessError as exc:
+            last_exc = exc
+            # If openclaw said "unknown command", try the other shape.
+            # Anything else is a real install failure — bail immediately.
+            continue
+    if last_exc is not None:
+        raise last_exc
 
 def restart_gateway(method: str) -> bool:
     """Returns True if a restart was actually issued."""
