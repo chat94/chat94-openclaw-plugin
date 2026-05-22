@@ -259,8 +259,9 @@ def restart_gateway(method: str) -> bool:
     if method == "foreground":
         # Bare host (container, raw `gateway run` in a terminal, etc.).
         # Kill any existing gateway process and start a fresh one
-        # detached. `--force` makes the new gateway kick out a stale
-        # listener on port 18789 if pkill missed it.
+        # detached. We do NOT pass `--force` because it requires
+        # lsof/fuser to clear port 18789, which slim container images
+        # rarely ship — the pkill above does the job instead.
         log_path = "/tmp/openclaw-gateway.log"
         try:
             subprocess.run(
@@ -270,11 +271,11 @@ def restart_gateway(method: str) -> bool:
         except Exception:
             pass
         import time
-        time.sleep(0.5)
+        time.sleep(1)  # let port 18789 free up
         try:
             logf = open(log_path, "ab")
             subprocess.Popen(
-                [openclaw, "gateway", "run", "--force"],
+                [openclaw, "gateway", "run"],
                 stdout=logf,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -283,7 +284,7 @@ def restart_gateway(method: str) -> bool:
             say(f"Started gateway in background. Log: {C_CYN}{log_path}{C_RST}")
             # Wait briefly so the gateway has time to bind + load plugins
             # before pair runs.
-            time.sleep(3)
+            time.sleep(4)
             return True
         except Exception as exc:
             warn(f"Could not start gateway: {exc}")
