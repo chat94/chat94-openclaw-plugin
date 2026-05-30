@@ -4,33 +4,26 @@ import { initializeChat4000Telemetry } from "./src/telemetry.js";
 
 initializeChat4000Telemetry();
 
+// Public surface (v2 — Matrix).
+export { RegistrarClient, RegistrarError, generatePairingCode } from "./src/pairing/registrar.js";
+export { configureIdentity, selfRedeemIdentity } from "./src/pairing/bot-identity.js";
+export { createPairedRoom } from "./src/matrix/rooms.js";
+export { startHumanPairing, buildQrUri } from "./src/pairing/qr.js";
+export { ENV_ENDPOINTS, resolveEnv, endpointsForEnv } from "./src/pairing/env.js";
 export {
-  generateGroupKey,
-  deriveGroupId,
-  formatGroupQrUrl,
-  generatePairingCode,
-  normalizePairingCode,
-  derivePairingRoomId,
-  generatePairingJoinerKeypair,
-  computePairingProof,
-  wrapGroupKeyToJoiner,
-  unwrapGroupKeyFromInitiator,
-  generatePairKey,
-  derivePairId,
-  formatPairQrUrl,
-} from "./src/crypto.js";
-export { joinPairingSession, hostPairingSession } from "./src/pairing.js";
+  loadMatrixCredentials,
+  saveMatrixCredentials,
+  deleteMatrixCredentials,
+} from "./src/matrix/credentials.js";
 export {
-  loadStoredGroupKey,
-  resolveChat4000KeyFilePath,
-  resolveOpenClawHome,
-  saveStoredGroupKey,
-} from "./src/key-store.js";
+  resolveChat4000CredentialsPath,
+  resolveChat4000AccountStateDir,
+} from "./src/paths.js";
 
 export default defineBundledChannelEntry({
   id: "chat4000",
   name: "chat4000",
-  description: "chat4000 channel plugin",
+  description: "chat4000 channel plugin (Matrix)",
   importMetaUrl: import.meta.url,
   plugin: {
     specifier: "./channel-plugin-api.js",

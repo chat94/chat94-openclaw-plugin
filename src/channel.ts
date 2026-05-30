@@ -1,60 +1,32 @@
 /**
- * chat4000 Channel Plugin for OpenClaw.
+ * chat4000 Channel Plugin for OpenClaw (v2 — Matrix).
  *
- * Routes messages between an OpenClaw agent and chat4000 iOS/macOS apps via
- * an end-to-end encrypted relay.
+ * Routes messages between an OpenClaw agent and chat4000 iOS/macOS apps over a
+ * Matrix homeserver (Tuwunel). The plugin runs as a Matrix bot participant:
  *
- * The plugin is split along a `MessageTransport` seam:
- *   - `RelayMessageTransport` owns the wire (WS, encryption, §6.6 ack flow,
- *     §6.5 keepalive, reconnect, dedup by inner.id).
- *   - This file owns OpenClaw glue: agent dispatch, session binding,
- *     session-relative timestamps, media materialization, and (via
- *     `StreamDispatcher`) the §6.4.2 streaming invariants.
+ *   - `gateway.startAccount` brings up a `MatrixClientHandle` (sync + E2E crypto)
+ *     and dispatches inbound room messages to the agent.
+ *   - Replies stream back as a single Matrix message that refines itself via
+ *     `m.replace` edits (`MatrixDraftStream`), settling to a final edit.
+ *   - `outbound` sends agent-initiated text into the bound room.
+ *
+ * The agent-dispatch pipeline (route → record → reply pipeline) is unchanged
+ * from v1; only the transport sink moved from the custom relay to Matrix.
  */
-
 import {
-  resolveChat4000Account,
+  getDefaultChat4000AccountId,
   hasConfiguredState,
   listChat4000AccountIds,
-  getDefaultChat4000AccountId,
+  resolveChat4000Account,
 } from "./accounts.js";
+import { getHandle, registerHandle, unregisterHandle } from "./channel-runtime.js";
+import { MatrixClientHandle } from "./matrix/client.js";
+import { sendText as matrixSendText, sendTyping } from "./matrix/send.js";
+import { MatrixDraftStream } from "./matrix/streaming.js";
+import type { MatrixInboundMessage } from "./matrix/types.js";
+import { RuntimeLogger } from "./runtime-logger.js";
 import { getChat4000SessionBinding } from "./session-binding.js";
 import type { ResolvedChat4000Account } from "./types.js";
-import { RuntimeLogger } from "./runtime-logger.js";
-import { StreamDispatcher } from "./stream-dispatcher.js";
-import {
-  registerTransport,
-  unregisterTransport,
-  getTransport,
-} from "./transport/registry.js";
-import type {
-  ConnectionState,
-  InnerAudioBody,
-  InnerImageBody,
-  InnerMessage,
-  InnerTextBody,
-  MessageTransport,
-} from "./transport/index.js";
-
-let mediaRuntimePromise:
-  | Promise<{
-      saveMediaBuffer: (
-        buffer: Buffer,
-        contentType: string,
-        source?: string,
-        subdir?: string,
-        fileName?: string,
-      ) => Promise<{ path: string; contentType?: string | null }>;
-      buildAgentMediaPayload: (
-        mediaList: Array<{ path: string; contentType?: string | null }>,
-      ) => {
-        MediaPath?: string;
-        MediaType?: string;
-        MediaPaths?: string[];
-        MediaTypes?: string[];
-      };
-    }>
-  | undefined;
 
 let replyPipelinePromise:
   | Promise<{
@@ -67,34 +39,15 @@ let replyPipelinePromise:
           start: () => Promise<void> | void;
           onStartError?: (err: unknown) => void;
         };
-      }) => {
-        typingCallbacks?: unknown;
-      };
+      }) => { typingCallbacks?: unknown };
     }>
   | undefined;
-
-let transportRuntimePromise:
-  | Promise<typeof import("./transport/relay.js")>
-  | undefined;
-
-async function loadTransportRuntime() {
-  transportRuntimePromise ??= import("./transport/relay.js");
-  return await transportRuntimePromise;
-}
 
 async function loadReplyPipelineRuntime() {
   replyPipelinePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline").then((mod) => ({
     createChannelReplyPipeline: mod.createChannelReplyPipeline,
   }));
   return await replyPipelinePromise;
-}
-
-async function loadMediaRuntime() {
-  mediaRuntimePromise ??= import("openclaw/plugin-sdk/media-runtime").then((mod) => ({
-    saveMediaBuffer: mod.saveMediaBuffer,
-    buildAgentMediaPayload: mod.buildAgentMediaPayload,
-  }));
-  return await mediaRuntimePromise;
 }
 
 // ─── Channel plugin definition ──────────────────────────────────────────────
@@ -126,47 +79,41 @@ export const chat4000Plugin = {
   // ─── Config ─────────────────────────────────────────────────────────────
 
   config: {
-    hasConfiguredState: ({ env }: { env?: Record<string, string> }) =>
-      hasConfiguredState(env),
+    hasConfiguredState: ({ env }: { env?: Record<string, string> }) => hasConfiguredState(env),
 
-    listAccountIds: (cfg?: { channels?: Record<string, unknown> }) =>
-      listChat4000AccountIds(cfg),
+    listAccountIds: (cfg?: { channels?: Record<string, unknown> }) => listChat4000AccountIds(cfg),
 
     defaultAccountId: (cfg?: { channels?: Record<string, unknown> }) =>
       getDefaultChat4000AccountId(cfg),
 
     isConfigured: (account: ResolvedChat4000Account) => account.configured,
 
-    resolveAccount: (
-      cfg?: { channels?: Record<string, unknown> },
-      accountId?: string | null,
-    ) => resolveChat4000Account({ cfg, accountId }),
+    resolveAccount: (cfg?: { channels?: Record<string, unknown> }, accountId?: string | null) =>
+      resolveChat4000Account({ cfg, accountId }),
 
-    inspectAccount: (
-      cfg?: { channels?: Record<string, unknown> },
-      accountId?: string | null,
-    ) => {
+    inspectAccount: (cfg?: { channels?: Record<string, unknown> }, accountId?: string | null) => {
       const account = resolveChat4000Account({ cfg, accountId });
       return {
         accountId: account.accountId,
         enabled: account.enabled,
         configured: account.configured,
-        groupId: account.groupId,
-        groupKeyStatus: account.groupKeyBytes.length === 32 ? `available (${account.keySource})` : "missing",
+        userId: account.userId || "(missing)",
+        homeserver: account.homeserver || "(missing)",
+        credentialStatus: account.configured
+          ? `available (${account.credentialSource})`
+          : "missing",
       };
     },
 
     describeAccount: (account: ResolvedChat4000Account) => ({
-      name: `chat4000 (${account.groupId.substring(0, 8)}...)`,
+      name: account.userId ? `chat4000 (${account.userId})` : "chat4000",
       configured: account.configured,
       enabled: account.enabled,
-      extra: {
-        groupId: account.groupId,
-      },
+      extra: { homeserver: account.homeserver, userId: account.userId },
     }),
   },
 
-  // ─── Gateway (transport lifecycle + agent dispatch) ─────────────────────
+  // ─── Gateway (Matrix client lifecycle + agent dispatch) ─────────────────
 
   gateway: {
     startAccount: async (ctx: {
@@ -186,88 +133,74 @@ export const chat4000Plugin = {
       if (!ctx.account.configured) {
         throw new Error(
           `chat4000 not configured for account "${ctx.account.accountId}". ` +
-          `Run "openclaw chat4000 setup" to create the local key and finish setup.`,
+            `Run "openclaw chat4000 setup" to provision a Matrix identity and pair.`,
         );
       }
 
-      ctx.log?.info?.(`[${ctx.account.accountId}] Starting chat4000 channel`);
+      ctx.log?.info?.(`[${ctx.account.accountId}] Starting chat4000 (Matrix) channel`);
       const runtimeLogger = new RuntimeLogger(ctx.account.runtimeLogLevel, {
         accountId: ctx.account.accountId,
-        groupId: ctx.account.groupId,
+        groupId: ctx.account.userId,
       });
-
-      const { RelayMessageTransport } = await loadTransportRuntime();
-      const transport = new RelayMessageTransport({ abortSignal: ctx.abortSignal });
-      registerTransport(ctx.account.accountId, transport);
 
       const setConnected = (connected: boolean) =>
         ctx.setStatus({
           accountId: ctx.account.accountId,
-          name: `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`,
+          name: `chat4000 (${ctx.account.userId})`,
           enabled: true,
           configured: true,
-          extra: { connected },
+          extra: { connected, homeserver: ctx.account.homeserver },
         });
 
-      transport.onConnectionState((state: ConnectionState) => {
-        if (state === "connected") {
-          ctx.log?.info?.(`[${ctx.account.accountId}] Connected to relay`);
-          setConnected(true);
-        } else if (state === "disconnected" || state === "reconnecting") {
-          if (state === "reconnecting") {
-            ctx.log?.info?.(`[${ctx.account.accountId}] Reconnecting...`);
-          } else {
-            ctx.log?.info?.(`[${ctx.account.accountId}] Disconnected from relay`);
-          }
-          setConnected(false);
-        } else if (typeof state === "object" && "kind" in state && state.kind === "failed") {
-          ctx.log?.error?.(`[${ctx.account.accountId}] Relay failed: ${state.reason}`);
-          setConnected(false);
-        }
-      });
-
-      transport.onReceive((inner) => {
-        void handleInbound({
-          inner,
-          transport,
-          ctx,
-          runtimeLogger,
-        });
-      });
-
-      transport.connect({
+      const handle = await MatrixClientHandle.create({
         accountId: ctx.account.accountId,
-        groupId: ctx.account.groupId,
-        groupKeyBytes: ctx.account.groupKeyBytes,
-        relayUrl: ctx.account.relayUrl,
-        releaseChannel: ctx.account.config.releaseChannel,
-        runtimeLogLevel: ctx.account.runtimeLogLevel,
+        credentials: {
+          homeserver: ctx.account.homeserver,
+          userId: ctx.account.userId,
+          accessToken: ctx.account.accessToken,
+          deviceId: ctx.account.deviceId,
+          pluginId: ctx.account.pluginId,
+        },
+        initialSyncLimit: ctx.account.config.initialSyncLimit,
+        abortSignal: ctx.abortSignal,
+        log: ctx.log,
+        onConnectionState: (state) => {
+          if (state === "connected") {
+            ctx.log?.info?.(`[${ctx.account.accountId}] Connected to ${ctx.account.homeserver}`);
+            runtimeLogger.info("runtime.hello_ok", { homeserver: ctx.account.homeserver });
+            setConnected(true);
+          } else if (state === "reconnecting") {
+            ctx.log?.info?.(`[${ctx.account.accountId}] Reconnecting...`);
+            setConnected(false);
+          } else if (state === "disconnected") {
+            setConnected(false);
+          } else if (typeof state === "object" && state.kind === "failed") {
+            ctx.log?.error?.(`[${ctx.account.accountId}] Matrix failed: ${state.reason}`);
+            setConnected(false);
+          }
+        },
+        onMessage: (message) => {
+          void handleInbound({ message, handle, ctx, runtimeLogger });
+        },
       });
 
-      // Block until OpenClaw aborts. Without this `await`, the Promise
-      // returned from `startAccount` resolves the moment the synchronous
-      // setup finishes, which OpenClaw interprets as "channel exited" and
-      // immediately triggers the auto-restart loop. Awaiting here keeps
-      // the channel "alive" for OpenClaw's lifecycle bookkeeping.
+      registerHandle(ctx.account.accountId, handle);
+      await handle.start();
+
+      // Keep the channel alive for OpenClaw's lifecycle bookkeeping until abort.
       await new Promise<void>((resolve) => {
         if (ctx.abortSignal.aborted) {
           resolve();
           return;
         }
-        ctx.abortSignal.addEventListener(
-          "abort",
-          () => {
-            resolve();
-          },
-          { once: true },
-        );
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
       });
-      transport.disconnect();
-      unregisterTransport(ctx.account.accountId);
+      await handle.stop();
+      unregisterHandle(ctx.account.accountId);
     },
   },
 
-  // ─── Outbound (agent → relay → iPhone) ─────────────────────────────────
+  // ─── Outbound (agent → Matrix room) ─────────────────────────────────────
 
   outbound: {
     base: {
@@ -282,20 +215,14 @@ export const chat4000Plugin = {
         to: string;
         text: string;
         accountId?: string;
-        replyToId?: string;
       }) => {
-        const account = resolveChat4000Account({
-          cfg: ctx.cfg,
-          accountId: ctx.accountId,
-        });
-        if (!account.configured) {
-          throw new Error(`chat4000 not configured for account "${account.accountId}"`);
+        const account = resolveChat4000Account({ cfg: ctx.cfg, accountId: ctx.accountId });
+        const handle = getHandle(account.accountId);
+        if (!handle) {
+          throw new Error(`No active Matrix connection for account "${account.accountId}"`);
         }
-        const transport = getTransport(account.accountId);
-        if (!transport) {
-          throw new Error(`No active relay connection for account "${account.accountId}"`);
-        }
-        const messageId = transport.send({ kind: "text", text: ctx.text });
+        const roomId = stripTargetPrefix(ctx.to);
+        const messageId = await matrixSendText(handle.client, roomId, ctx.text);
         return { messageId };
       },
       sendMedia: async (ctx: {
@@ -304,29 +231,26 @@ export const chat4000Plugin = {
         text: string;
         mediaUrl?: string;
         accountId?: string;
-        replyToId?: string;
       }) => {
-        // V1: Send media URL as text. V2: upload + inline.
-        const account = resolveChat4000Account({
-          cfg: ctx.cfg,
-          accountId: ctx.accountId,
-        });
-        if (!account.configured) {
-          throw new Error(`chat4000 not configured for account "${account.accountId}"`);
+        // V2 interim: send media as a URL in text. Native mxc upload is a follow-up.
+        const account = resolveChat4000Account({ cfg: ctx.cfg, accountId: ctx.accountId });
+        const handle = getHandle(account.accountId);
+        if (!handle) {
+          throw new Error(`No active Matrix connection for account "${account.accountId}"`);
         }
-        const transport = getTransport(account.accountId);
-        if (!transport) {
-          throw new Error(`No active relay connection for account "${account.accountId}"`);
-        }
-        const messageText = ctx.mediaUrl
-          ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}`
-          : ctx.text;
-        const messageId = transport.send({ kind: "text", text: messageText });
+        const roomId = stripTargetPrefix(ctx.to);
+        const text = ctx.mediaUrl ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}` : ctx.text;
+        const messageId = await matrixSendText(handle.client, roomId, text);
         return { messageId };
       },
     },
   },
 };
+
+function stripTargetPrefix(to: string): string {
+  // Accept "chat4000:!room:hs", "room:!room:hs", or a bare room id.
+  return to.replace(/^chat4000:/i, "").replace(/^room:/i, "");
+}
 
 // ─── Inbound dispatch ───────────────────────────────────────────────────────
 
@@ -344,110 +268,52 @@ type InboundCtx = {
 };
 
 async function handleInbound(params: {
-  inner: InnerMessage;
-  transport: MessageTransport;
+  message: MatrixInboundMessage;
+  handle: MatrixClientHandle;
   ctx: InboundCtx;
   runtimeLogger: RuntimeLogger;
 }): Promise<void> {
-  const { inner, transport, ctx, runtimeLogger } = params;
-  const isFromApp = inner.from?.role === "app";
+  const { message, handle, ctx, runtimeLogger } = params;
 
-  // Inner ack frames flow through onReceive but the plugin doesn't act on
-  // them in v1 — they would drive a "delivered" indicator if the plugin
-  // ever exposed a UI. Logged only.
-  if (inner.body.kind === "ack") {
-    runtimeLogger.info("runtime.inner_ack_recv", {
-      msg_id: inner.id,
-      refs: inner.body.refs,
-      stage: inner.body.stage,
-      from_role: inner.from?.role,
-    });
+  if (message.body.kind !== "text") {
+    // Media inbound currently arrives as a text placeholder from inbound.ts.
     return;
   }
 
-  // Streaming chunks from another sender; we don't aggregate inbound
-  // streams. Nothing to do beyond logging.
-  if (inner.body.kind === "textDelta" || inner.body.kind === "textEnd") {
-    ctx.log?.debug?.(
-      `[${ctx.account.accountId}] Ignoring inbound ${inner.body.kind} from peer`,
-    );
-    return;
-  }
-
-  if (inner.body.kind === "status") {
-    ctx.log?.debug?.(
-      `[${ctx.account.accountId}] Received peer status: ${inner.body.status}`,
-    );
-    return;
-  }
-
-  if (inner.body.kind === "unknown") {
-    runtimeLogger.info("runtime.msg_dropped", {
-      msg_id: inner.id,
-      reason: "unsupported_inner_type",
-      inner_t: inner.body.rawType,
-    });
-    return;
-  }
-
-  // Beyond this point: text / image / audio.
-  if (
-    inner.body.kind !== "text" &&
-    inner.body.kind !== "image" &&
-    inner.body.kind !== "audio"
-  ) {
-    return;
-  }
-
-  // Per protocol §6.6.5: emit `received` ack BEFORE running the agent so the
-  // app's ✓✓ tick lights up immediately, not after token generation. Only
-  // for app-origin frames. Wrapped in try/catch because the transport may
-  // already be disconnected if a config-reload tore it down while this
-  // inbound was mid-processing.
-  if (isFromApp) {
-    try {
-      transport.send({ kind: "ack", refs: inner.id, stage: "received" });
-    } catch (err) {
-      runtimeLogger.info("runtime.inner_ack_send_error", {
-        msg_id: inner.id,
-        error: String(err),
-      });
-      return;
-    }
-  }
+  // Flow-B ack: send a read receipt as soon as we accept the message, before the
+  // agent runs, so the app's delivered/read indicator lights up promptly.
+  void handle.sendReadReceipt(message.roomId, message.eventId);
 
   if (!ctx.channelRuntime) {
     runtimeLogger.info("runtime.ai_request_error", {
-      msg_id: inner.id,
+      msg_id: message.eventId,
       error: "channelRuntime missing",
     });
-    ctx.log?.warn?.(
-      `[${ctx.account.accountId}] runtime.dispatch unavailable: channelRuntime missing`,
-    );
     return;
   }
 
   await dispatchToAgent({
-    inner: inner as InnerMessage & {
-      body: InnerTextBody | InnerImageBody | InnerAudioBody;
-    },
-    transport,
+    message: message as MatrixInboundMessage & { body: { kind: "text"; text: string } },
+    handle,
     ctx,
     runtimeLogger,
   });
 }
 
 async function dispatchToAgent(params: {
-  inner: InnerMessage & { body: InnerTextBody | InnerImageBody | InnerAudioBody };
-  transport: MessageTransport;
+  message: MatrixInboundMessage & { body: { kind: "text"; text: string } };
+  handle: MatrixClientHandle;
   ctx: InboundCtx;
   runtimeLogger: RuntimeLogger;
 }): Promise<void> {
-  const { inner, transport, ctx, runtimeLogger } = params;
+  const { message, handle, ctx, runtimeLogger } = params;
+  const roomId = message.roomId;
 
-  const senderAddress = `chat4000:${ctx.account.groupId}`;
+  const senderAddress = `chat4000:${roomId}`;
   const recipientAddress = "chat4000:agent";
-  const conversationLabel = `chat4000 (${ctx.account.groupId.substring(0, 8)}...)`;
+  const conversationLabel = message.senderDisplayName
+    ? `chat4000 (${message.senderDisplayName})`
+    : `chat4000 (${roomId.substring(0, 12)}...)`;
 
   const runtime = ctx.channelRuntime as {
     routing: {
@@ -492,11 +358,11 @@ async function dispatchToAgent(params: {
     cfg: ctx.cfg,
     channel: "chat4000",
     accountId: ctx.account.accountId,
-    peer: { kind: "direct", id: ctx.account.groupId },
+    peer: { kind: "direct", id: roomId },
   });
   const boundSession = getChat4000SessionBinding({
     accountId: ctx.account.accountId,
-    groupId: ctx.account.groupId,
+    groupId: roomId,
   });
   const targetSessionKey = boundSession?.targetSessionKey ?? route.sessionKey;
   const targetAgentId = boundSession?.agentId ?? route.agentId;
@@ -507,74 +373,20 @@ async function dispatchToAgent(params: {
       { agentId: targetAgentId },
     );
 
-  if (boundSession) {
-    runtimeLogger.info("runtime.session_bound", {
-      msg_id: inner.id,
-      target_session_key: boundSession.targetSessionKey,
-      target_agent_id: boundSession.agentId,
-    });
-  }
-
   const previousTimestamp = runtime.session.readSessionUpdatedAt?.({
     storePath,
     sessionKey: targetSessionKey,
   });
 
-  const rawBody =
-    inner.body.kind === "text"
-      ? inner.body.text
-      : inner.body.kind === "image"
-        ? "[Image]"
-        : `[Voice note${inner.body.durationMs > 0 ? ` ${Math.round(inner.body.durationMs / 1000)}s` : ""}]`;
-
+  const rawBody = message.body.text;
   const body = runtime.reply.formatAgentEnvelope({
     channel: "chat4000",
     from: conversationLabel,
     body: rawBody,
-    timestamp: inner.ts,
+    timestamp: message.ts,
     previousTimestamp,
     envelope: runtime.reply.resolveEnvelopeFormatOptions(ctx.cfg),
   });
-
-  let mediaPayload: Record<string, unknown> = {};
-  if (inner.body.kind === "image" || inner.body.kind === "audio") {
-    try {
-      const { saveMediaBuffer, buildAgentMediaPayload } = await loadMediaRuntime();
-      const saved = await saveMediaBuffer(
-        Buffer.from(inner.body.dataBase64, "base64"),
-        inner.body.mimeType,
-        "inbound",
-        undefined,
-        `chat4000-${inner.id}`,
-      );
-      mediaPayload = buildAgentMediaPayload([
-        {
-          path: saved.path,
-          contentType: saved.contentType ?? inner.body.mimeType,
-        },
-      ]);
-      runtimeLogger.info(
-        inner.body.kind === "image" ? "runtime.image_forwarded" : "runtime.audio_forwarded",
-        {
-          msg_id: inner.id,
-          mime_type: inner.body.mimeType,
-          media_path: saved.path,
-          ...(inner.body.kind === "audio" ? { duration_ms: inner.body.durationMs } : {}),
-        },
-      );
-    } catch (error) {
-      runtimeLogger.info(
-        inner.body.kind === "image" ? "runtime.image_dropped" : "runtime.audio_dropped",
-        {
-          msg_id: inner.id,
-          reason: String(error),
-        },
-      );
-      throw error instanceof Error
-        ? error
-        : new Error(`chat4000 ${inner.body.kind} save failed: ${String(error)}`);
-    }
-  }
 
   const ctxPayload = runtime.reply.finalizeInboundContext({
     Body: body,
@@ -587,53 +399,35 @@ async function dispatchToAgent(params: {
     AccountId: route.accountId ?? ctx.account.accountId,
     ChatType: "direct",
     ConversationLabel: conversationLabel,
-    SenderId: ctx.account.groupId,
+    SenderId: message.senderId,
     Provider: "chat4000",
     Surface: "chat4000",
-    MessageSid: inner.id,
-    MessageSidFull: inner.id,
-    Timestamp: inner.ts,
-    Chat4000FromRole: inner.from?.role,
-    Chat4000FromDeviceId: inner.from?.deviceId,
-    Chat4000FromDeviceName: inner.from?.deviceName,
-    ...(inner.body.kind === "audio" ? { AudioDurationMs: inner.body.durationMs } : {}),
+    MessageSid: message.eventId,
+    MessageSidFull: message.eventId,
+    Timestamp: message.ts,
+    Chat4000RoomId: roomId,
+    Chat4000SenderId: message.senderId,
     OriginatingChannel: "chat4000",
     OriginatingTo: senderAddress,
     CommandAuthorized: true,
-    ...mediaPayload,
   });
 
   const { createChannelReplyPipeline } = await loadReplyPipelineRuntime();
 
-  // Reply pipeline state: dispatcher + last-status memo.
-  const dispatcher = new StreamDispatcher({
-    transport,
-    onStreamReset: ({ streamId, abandonedChars }) => {
-      runtimeLogger.info("runtime.stream_reset", {
-        msg_id: inner.id,
-        stream_id: streamId,
-        reason: "non-monotonic-partial",
-        abandoned_chars: abandonedChars,
-      });
-    },
+  const draft = new MatrixDraftStream({
+    client: handle.client,
+    roomId,
+    log: (m) => runtimeLogger.debug("runtime.draft_stream", { msg_id: message.eventId, detail: m }),
   });
 
-  let lastSentStatus: "thinking" | "typing" | "idle" | undefined;
-  const sendStatus = (status: "thinking" | "typing" | "idle") => {
-    if (lastSentStatus === status) return;
-    transport.send({ kind: "status", status });
-    lastSentStatus = status;
-  };
-  const finalizeStreamingState = () => {
-    dispatcher.flush();
-    sendStatus("idle");
+  let lastTyping: boolean | undefined;
+  const setTyping = (on: boolean) => {
+    if (lastTyping === on) return;
+    lastTyping = on;
+    void sendTyping(handle.client, roomId, on);
   };
 
-  let finalSent = false;
-
-  runtimeLogger.info("runtime.ai_request_start", {
-    msg_id: inner.id,
-  });
+  runtimeLogger.info("runtime.ai_request_start", { msg_id: message.eventId });
 
   const replyPipeline = createChannelReplyPipeline({
     cfg: ctx.cfg,
@@ -641,12 +435,10 @@ async function dispatchToAgent(params: {
     channel: "chat4000",
     accountId: route.accountId ?? ctx.account.accountId,
     typing: {
-      start: () => {
-        sendStatus("typing");
-      },
+      start: () => setTyping(true),
       onStartError: (err) => {
         runtimeLogger.info("runtime.ai_request_error", {
-          msg_id: inner.id,
+          msg_id: message.eventId,
           error: String(err),
           phase: "typing_start",
         });
@@ -660,7 +452,7 @@ async function dispatchToAgent(params: {
     ctx: ctxPayload,
     onRecordError: (error: unknown) => {
       runtimeLogger.info("runtime.ai_request_error", {
-        msg_id: inner.id,
+        msg_id: message.eventId,
         error: String(error),
         phase: "record",
       });
@@ -678,63 +470,35 @@ async function dispatchToAgent(params: {
       deliver: async (payload: { text?: string }, info: { kind: string }) => {
         if (info.kind !== "final") return;
         const text = payload.text ?? "";
-        const result = dispatcher.onFinal(text);
-        if (result === "oneshot") {
-          // No streaming had occurred but the agent produced final text —
-          // ship it as a single `text` frame instead of a streaming pair.
-          transport.send({ kind: "text", text });
+        if (text.trim().length > 0) {
+          await draft.finalize(text);
         }
-        if (result === "empty") {
-          ctx.log?.debug?.(
-            `[${ctx.account.accountId}] runtime.send skipped empty response id=${inner.id}`,
-          );
-        }
-        finalizeStreamingState();
-        finalSent = true;
+        draft.reset();
+        setTyping(false);
       },
       onError: (error: unknown, info: { kind: string }) => {
         runtimeLogger.info("runtime.ai_request_error", {
-          msg_id: inner.id,
+          msg_id: message.eventId,
           error: String(error),
           phase: info.kind,
         });
-        finalizeStreamingState();
+        setTyping(false);
       },
     },
     replyOptions: {
-      onReasoningStream: async () => {
-        sendStatus("thinking");
-      },
-      onReasoningEnd: async () => {
-        sendStatus("typing");
-      },
-      onAssistantMessageStart: async () => {
-        sendStatus("typing");
-      },
+      onReasoningStream: async () => setTyping(true),
+      onAssistantMessageStart: async () => setTyping(true),
       onPartialReply: async (payload: { text?: string }) => {
         const text = payload.text ?? "";
         if (!text) return;
-        sendStatus("typing");
-        dispatcher.onPartial(text);
+        setTyping(true);
+        draft.update(text);
       },
-      onToolStart: async () => {
-        sendStatus("thinking");
-      },
-      onCompactionStart: async () => {
-        sendStatus("thinking");
-      },
-      onCompactionEnd: async () => {
-        sendStatus("typing");
-      },
+      onToolStart: async () => setTyping(true),
     },
   });
 
-  if (!finalSent) {
-    finalizeStreamingState();
-  }
-  dispatcher.dispose();
-
-  runtimeLogger.info("runtime.ai_request_success", {
-    msg_id: inner.id,
-  });
+  await draft.dispose();
+  setTyping(false);
+  runtimeLogger.info("runtime.ai_request_success", { msg_id: message.eventId });
 }

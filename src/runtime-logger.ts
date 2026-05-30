@@ -1,7 +1,7 @@
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
-import { resolveOpenClawHome } from "./key-store.js";
+import { resolveOpenClawHome } from "./paths.js";
 import { rotateLogIfOversized } from "./log-rotate.js";
 
 export type RuntimeLogLevel = "info" | "debug";

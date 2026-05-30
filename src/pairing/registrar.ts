@@ -1,0 +1,187 @@
+/**
+ * HTTP client for the chat4000 Registrar (PROTOCOL §3).
+ *
+ *   POST /pair/register  (bearer SERVICE_TOKEN)  { code, plugin_id, user_id?, ttl_seconds? }
+ *                                                -> { ok, expires_at }
+ *   POST /pair/redeem    (public; code is secret) { code, device_name? }
+ *                                                -> { gateway_url, user_id, device_id, access_token }
+ *   GET  /pair/status?code=...  (bearer)         -> { status: pending|completed|expired, user_id? }
+ *
+ * The plugin picks the pairing `code`. Errors are JSON `{errcode, error}` with the
+ * documented HTTP status.
+ */
+
+export type PairRegisterResult = {
+  ok: boolean;
+  expiresAt: number;
+};
+
+export type PairKind = "user" | "plugin";
+
+export type PairRedeemResult = {
+  gatewayUrl: string;
+  userId: string;
+  deviceId: string;
+  accessToken: string;
+  /** Only present for a `kind=plugin` code — the id the registrar issued. */
+  pluginId?: string;
+};
+
+export type PairStatus = "pending" | "completed" | "expired";
+
+export type PairStatusResult = {
+  status: PairStatus;
+  userId?: string;
+};
+
+export class RegistrarError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly errcode?: string,
+    readonly body?: unknown,
+  ) {
+    super(message);
+    this.name = "RegistrarError";
+  }
+
+  get isConflict(): boolean {
+    return this.status === 409;
+  }
+
+  get isNotFound(): boolean {
+    return this.status === 404;
+  }
+
+  get isGone(): boolean {
+    return this.status === 410;
+  }
+}
+
+export type RegistrarClientOptions = {
+  /** Registrar base URL, e.g. https://registrar.chat4000.com. */
+  baseUrl: string;
+  /** SERVICE_TOKEN bearer for /pair/register and /pair/status. */
+  serviceToken: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+export class RegistrarClient {
+  private readonly baseUrl: string;
+
+  private readonly serviceToken: string;
+
+  private readonly timeoutMs: number;
+
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(opts: RegistrarClientOptions) {
+    this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.serviceToken = opts.serviceToken;
+    this.timeoutMs = opts.timeoutMs ?? 10_000;
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  /**
+   * Reserve a pairing code (PROTOCOL §3.1). `kind="user"` (default) requires a
+   * `pluginId` (which plugin the user pairs with); `kind="plugin"` omits it (the
+   * registrar issues a new plugin_id at redeem).
+   */
+  async registerPairing(params: {
+    code: string;
+    kind?: PairKind;
+    pluginId?: string;
+    userId?: string;
+    ttlSeconds?: number;
+  }): Promise<PairRegisterResult> {
+    const body = (await this.request("POST", "/pair/register", {
+      auth: true,
+      body: {
+        code: params.code,
+        kind: params.kind,
+        plugin_id: params.pluginId,
+        user_id: params.userId,
+        ttl_seconds: params.ttlSeconds,
+      },
+    })) as Record<string, unknown>;
+    return { ok: Boolean(body.ok), expiresAt: Number(body.expires_at) };
+  }
+
+  /** Redeem a pairing code (public). Used for plugin self-bootstrap too. */
+  async redeemPairing(params: { code: string; deviceName?: string }): Promise<PairRedeemResult> {
+    const body = (await this.request("POST", "/pair/redeem", {
+      auth: false,
+      body: { code: params.code, device_name: params.deviceName },
+    })) as Record<string, unknown>;
+    return {
+      gatewayUrl: String(body.gateway_url),
+      userId: String(body.user_id),
+      deviceId: String(body.device_id),
+      accessToken: String(body.access_token),
+      pluginId: typeof body.plugin_id === "string" ? body.plugin_id : undefined,
+    };
+  }
+
+  /** Poll pairing completion (plugin → registrar). */
+  async getPairingStatus(code: string): Promise<PairStatusResult> {
+    const body = (await this.request("GET", `/pair/status?code=${encodeURIComponent(code)}`, {
+      auth: true,
+    })) as Record<string, unknown>;
+    return {
+      status: String(body.status) as PairStatus,
+      userId: typeof body.user_id === "string" ? body.user_id : undefined,
+    };
+  }
+
+  private async request(
+    method: string,
+    pathName: string,
+    opts: { auth: boolean; body?: unknown },
+  ): Promise<unknown> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+    if (opts.auth) headers.Authorization = `Bearer ${this.serviceToken}`;
+
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}${pathName}`, {
+        method,
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
+      });
+      const text = await res.text();
+      const parsed = text ? safeJsonParse(text) : undefined;
+      if (!res.ok) {
+        const p = parsed as { errcode?: string; error?: string } | undefined;
+        throw new RegistrarError(
+          p?.error ?? `registrar ${method} ${pathName} failed: ${res.status}`,
+          res.status,
+          p?.errcode,
+          parsed,
+        );
+      }
+      return parsed;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+/** Generate a pairing code (URL-safe, within the §3.1 6–128 char bound). */
+export function generatePairingCode(bytes = 18): string {
+  // Node crypto without importing at module top to keep this tree-shake friendly.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
+  return randomBytes(bytes).toString("base64url");
+}

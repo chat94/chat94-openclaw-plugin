@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { resolveOpenClawHomeDir, resolveOpenClawStateDir } from "./key-store.js";
+import { resolveOpenClawHomeDir, resolveOpenClawStateDir } from "./paths.js";
 
 type UnknownRecord = Record<string, unknown>;
 

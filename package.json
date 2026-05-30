@@ -1,7 +1,7 @@
 {
   "name": "@chat4000/openclaw-plugin",
-  "version": "1.4.2",
-  "description": "OpenClaw channel plugin for chat4000 — routes messages through E2E encrypted relay",
+  "version": "2.0.0",
+  "description": "OpenClaw channel plugin for chat4000 — routes agent messages over Matrix (Tuwunel) end-to-end encrypted rooms",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "files": [
@@ -25,13 +25,13 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.1",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.1"
+    "openclaw": ">=2026.5.27"
   },
   "openclaw": {
     "extensions": [
@@ -44,20 +44,21 @@
       "detailLabel": "chat4000",
       "docsPath": "/channels/chat4000",
       "docsLabel": "chat4000",
-      "blurb": "Connect your chat4000 iOS/macOS app via encrypted relay",
+      "blurb": "Connect your chat4000 iOS/macOS app over a Matrix homeserver",
       "systemImage": "iphone",
       "order": 80
     },
     "install": {
-      "minHostVersion": ">=2026.4.1"
+      "minHostVersion": ">=2026.5.27"
     }
   },
   "dependencies": {
-    "@noble/ciphers": "^2.2.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "^18.3.0",
     "@sentry/node": "^8.55.1",
-    "node-sqlite3-wasm": "^0.8.56",
-    "qrcode-terminal": "^0.12.0",
-    "ws": "^8.20.0"
+    "fake-indexeddb": "^6.0.0",
+    "markdown-it": "^14.1.0",
+    "matrix-js-sdk": "^41.6.0",
+    "qrcode-terminal": "^0.12.0"
   },
   "engines": {
     "node": ">=18.17.0"

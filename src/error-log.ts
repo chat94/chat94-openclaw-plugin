@@ -1,6 +1,6 @@
 import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { resolveOpenClawHome } from "./key-store.js";
+import { resolveOpenClawHome } from "./paths.js";
 import { rotateLogIfOversized } from "./log-rotate.js";
 import { captureChat4000Exception } from "./telemetry.js";
 

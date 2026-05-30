@@ -1,8 +1,9 @@
-import { deriveGroupId, parseGroupKey } from "./crypto.js";
-import { loadStoredGroupKey, resolveChat4000KeyFilePath } from "./key-store.js";
-import type { ResolvedChat4000Account, Chat4000Config } from "./types.js";
-
-const DEFAULT_RELAY_URL = "wss://relay.chat4000.com/ws";
+import { loadMatrixCredentials } from "./matrix/credentials.js";
+import type {
+  Chat4000Config,
+  Chat4000ProvisioningConfig,
+  ResolvedChat4000Account,
+} from "./types.js";
 
 type ChannelConfigInput = { channels?: Record<string, unknown> } | undefined;
 
@@ -22,13 +23,36 @@ export function getDefaultChat4000AccountId(cfg: ChannelConfigInput): string {
   if (channelConfig.defaultAccount && accountIds.includes(channelConfig.defaultAccount)) {
     return channelConfig.defaultAccount;
   }
-
   return accountIds[0] ?? channelConfig.defaultAccount ?? "default";
+}
+
+function trimmed(value: string | undefined): string {
+  return value?.trim() ?? "";
+}
+
+function resolveProvisioning(merged: Chat4000Config): Chat4000ProvisioningConfig {
+  const fromConfig = merged.provisioning ?? {};
+  const url =
+    trimmed(process.env.CHAT4000_REGISTRAR_URL) ||
+    trimmed(process.env.CHAT4000_PROVISIONING_URL) ||
+    trimmed(fromConfig.url) ||
+    "";
+  const serviceToken =
+    trimmed(process.env.CHAT4000_SERVICE_TOKEN) ||
+    trimmed(process.env.CHAT4000_PROVISIONING_API_KEY) ||
+    trimmed(fromConfig.serviceToken) ||
+    "";
+  return {
+    url: url || undefined,
+    serviceToken: serviceToken || undefined,
+  };
 }
 
 /**
  * Resolve a chat4000 account from OpenClaw config.
- * Merges top-level + per-account config with the fixed production relay.
+ *
+ * Matrix identity precedence: env vars → channel/account config → the persisted
+ * credentials file written by `setup`/`pair`.
  */
 export function resolveChat4000Account(params: {
   cfg?: { channels?: Record<string, unknown> };
@@ -36,69 +60,70 @@ export function resolveChat4000Account(params: {
 }): ResolvedChat4000Account {
   const channelConfig = getChannelConfig(params.cfg);
   const accountId = params.accountId ?? getDefaultChat4000AccountId(params.cfg);
-
   const accountOverrides = channelConfig.accounts?.[accountId] ?? {};
-  const merged = { ...channelConfig, ...accountOverrides };
+  const merged: Chat4000Config = { ...channelConfig, ...accountOverrides };
 
-  const relayUrl = DEFAULT_RELAY_URL;
+  const envHomeserver = trimmed(process.env.CHAT4000_HOMESERVER);
+  const envUserId = trimmed(process.env.CHAT4000_USER_ID);
+  const envAccessToken = trimmed(process.env.CHAT4000_ACCESS_TOKEN);
+  const envDeviceId = trimmed(process.env.CHAT4000_DEVICE_ID);
 
-  let groupKeyBytes: Buffer = Buffer.alloc(0);
-  let groupId = "";
-  let keySource: ResolvedChat4000Account["keySource"] = "missing";
-  const keyFilePath = resolveChat4000KeyFilePath(accountId);
+  const stored = loadMatrixCredentials(accountId);
 
-  const envGroupKeyRaw = process.env.CHAT4000_GROUP_KEY?.trim() || "";
-  const configGroupKeyRaw = merged.groupKey?.trim() || "";
+  let homeserver = "";
+  let userId = "";
+  let accessToken = "";
+  let deviceId = "";
+  let pluginId: string | undefined;
+  let credentialSource: ResolvedChat4000Account["credentialSource"] = "missing";
 
-  if (envGroupKeyRaw.length > 0) {
-    try {
-      groupKeyBytes = parseGroupKey(envGroupKeyRaw);
-      groupId = deriveGroupId(groupKeyBytes);
-      keySource = "env";
-    } catch {
-      groupKeyBytes = Buffer.alloc(0) as Buffer;
-      groupId = "";
-    }
-  } else if (configGroupKeyRaw.length > 0) {
-    try {
-      groupKeyBytes = parseGroupKey(configGroupKeyRaw);
-      groupId = deriveGroupId(groupKeyBytes);
-      keySource = "config";
-    } catch {
-      groupKeyBytes = Buffer.alloc(0) as Buffer;
-      groupId = "";
-    }
-  } else {
-    const stored = loadStoredGroupKey(accountId);
-    if (stored) {
-      groupKeyBytes = Buffer.from(stored.groupKeyBytes);
-      groupId = stored.groupId;
-      keySource = "state-file";
-    }
+  if (envHomeserver && envUserId && envAccessToken) {
+    homeserver = envHomeserver;
+    userId = envUserId;
+    accessToken = envAccessToken;
+    deviceId = envDeviceId;
+    credentialSource = "env";
+  } else if (trimmed(merged.homeserver) && trimmed(merged.userId) && trimmed(merged.accessToken)) {
+    homeserver = trimmed(merged.homeserver);
+    userId = trimmed(merged.userId);
+    accessToken = trimmed(merged.accessToken);
+    deviceId = trimmed(merged.deviceId);
+    credentialSource = "config";
+  } else if (stored) {
+    homeserver = stored.homeserver;
+    userId = stored.userId;
+    accessToken = stored.accessToken;
+    deviceId = stored.deviceId;
+    pluginId = stored.pluginId;
+    credentialSource = "state-file";
   }
 
-  const configured = groupKeyBytes.length === 32;
+  const configured = Boolean(homeserver && userId && accessToken && deviceId);
 
   return {
     accountId,
     enabled: merged.enabled !== false,
     configured,
-    relayUrl,
     pairingLogLevel: merged.pairingLogLevel === "debug" ? "debug" : "info",
     runtimeLogLevel: merged.runtimeLogLevel === "debug" ? "debug" : "info",
-    groupId,
-    groupKeyBytes,
-    keyFilePath,
-    keySource,
+    homeserver,
+    userId,
+    accessToken,
+    deviceId,
+    pluginId,
+    credentialSource,
+    provisioning: resolveProvisioning(merged),
     config: merged,
   };
 }
 
 /**
- * Check if the channel has been configured via env vars alone
- * (used by setup wizard to detect pre-configuration)
+ * Whether the channel is pre-configured via env vars alone (used by the setup
+ * wizard to detect a hands-off configuration).
  */
 export function hasConfiguredState(env?: Record<string, string>): boolean {
-  const groupKey = env?.CHAT4000_GROUP_KEY?.trim();
-  return Boolean(groupKey && groupKey.length > 0);
+  const hs = env?.CHAT4000_HOMESERVER?.trim();
+  const uid = env?.CHAT4000_USER_ID?.trim();
+  const token = env?.CHAT4000_ACCESS_TOKEN?.trim();
+  return Boolean(hs && uid && token);
 }

@@ -1,145 +1,136 @@
 # 🤖 chat4000 OpenClaw Plugin
 
-> Connect your chat4000 iPhone or Mac app to your OpenClaw agent.
+> Connect your chat4000 iPhone or Mac app to your OpenClaw agent — over Matrix.
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@chat4000/openclaw-plugin"><img alt="npm" src="https://img.shields.io/npm/v/@chat4000/openclaw-plugin?label=npm"></a>
-  <a href="https://github.com/chat4000/chat4000-openclaw-plugin"><img alt="openclaw" src="https://img.shields.io/badge/openclaw-%E2%89%A52026.4.1-orange"></a>
+  <a href="https://github.com/chat4000/chat4000-openclaw-plugin"><img alt="openclaw" src="https://img.shields.io/badge/openclaw-%E2%89%A52026.5.27-orange"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
   <a href="https://chat4000.com"><img alt="homepage" src="https://img.shields.io/badge/web-chat4000.com-9b59ff"></a>
-  <a href="https://t.me/chat4000official"><img alt="telegram" src="https://img.shields.io/badge/chat-@chat4000official-26a5e4?logo=telegram&logoColor=white"></a>
 </p>
 
-An OpenClaw channel plugin that routes messages between your OpenClaw agent and the [chat4000 iOS/macOS app](https://github.com/chat4000/chat4000-apple) over an end-to-end encrypted relay. Same crypto, same pairing model, same protocol as the [Rust CLI](https://github.com/chat4000/chat4000-cli) — your agent becomes one more participant in your encrypted group.
+An OpenClaw channel plugin that routes messages between your OpenClaw agent and the
+chat4000 iOS/macOS app over a **Matrix homeserver** (Tuwunel). The agent runs as a Matrix
+bot participant in your end-to-end encrypted rooms. Pairing goes through the chat4000
+**Registrar** (protocol §3).
+
+> **chat4000 v2 is a ground-up move to Matrix.** It is **not** compatible with the v1
+> custom relay. Upgrading from a v1 install? See [Migrating from v1](#-migrating-from-v1).
 
 ---
 
 ## 🚀 Install
 
 ```sh
-openclaw plugin install @chat4000/openclaw-plugin
+openclaw plugins install @chat4000/openclaw-plugin
 openclaw gateway restart
-openclaw chat4000 setup
+
+# Self-onboard a bot identity via the registrar (needs a SERVICE_TOKEN):
+openclaw chat4000 setup --self-redeem \
+  --registrar-url https://registrar.chat4000.com \
+  --service-token <SERVICE_TOKEN>
 ```
 
-`setup` writes a local key, then walks you through pairing — host a room (prints code + QR for your phone) or join one with a code from another device. After pairing, the plugin auto-connects whenever the gateway starts.
+`setup --self-redeem` registers a `kind=plugin` code and redeems it (protocol §3): the
+registrar mints the plugin's `@plugin_…` account + device + `plugin_id`. It then writes the
+config and prints a pairing code + QR for your device. After setup the plugin auto-connects
+whenever the gateway starts.
+
+**Or supply an existing bot login directly** (no registrar needed):
+
+```sh
+openclaw chat4000 setup \
+  --homeserver https://matrix.chat4000.com \
+  --user-id @plugin_xxx:chat4000.com --access-token <token> --device-id <device>
+```
+
+(`CHAT4000_HOMESERVER` / `CHAT4000_USER_ID` / `CHAT4000_ACCESS_TOKEN` / `CHAT4000_DEVICE_ID`
+env vars work too.) Device pairing always needs a registrar `SERVICE_TOKEN`.
 
 **From source:**
 ```sh
 git clone https://github.com/chat4000/chat4000-openclaw-plugin
 cd chat4000-openclaw-plugin
 npm install && npm run build
-openclaw plugin install $(pwd)
+openclaw plugins install $(pwd)
 ```
 
-> **Note** — `openclaw gateway restart` works for launchd / systemd / schtasks. If you started the gateway with `openclaw gateway run` in a terminal, stop it (Ctrl+C) and rerun.
+---
+
+## 🧪 Stage vs production
+
+The plugin ships with both backend presets (protocol §0). Select with `--env` (or the
+`--stage` shortcut, or `CHAT4000_ENV`):
+
+| Env | Homeserver | Registrar | Gateway |
+|---|---|---|---|
+| `prod` (default) | `https://matrix.chat4000.com` | `https://registrar.chat4000.com` | `wss://gateway.chat4000.com/ws` |
+| `stage` | `https://matrix.stgcht4.duckdns.org` | `https://registrar.stgcht4.duckdns.org` | `wss://gateway.stgcht4.duckdns.org/ws` |
+
+```sh
+# Stage (TLS via Duck DNS wildcard — never put real user data there):
+openclaw chat4000 setup --stage --self-redeem --service-token <STAGE_SERVICE_TOKEN>
+openclaw chat4000 pair  --stage --service-token <STAGE_SERVICE_TOKEN>
+```
+
+`--registrar-url` / `--homeserver` override individual endpoints if you self-host.
 
 ---
 
 ## ⚡ Commands
 
 ```sh
-openclaw chat4000 setup                    # first-time install + pair
-openclaw chat4000 pair                     # add another device
-openclaw chat4000 status                   # connection + key info
-openclaw chat4000 reset                    # wipe local key + ack store (re-pair after)
-openclaw chat4000 sessions list            # OpenClaw sessions you can bind to
-openclaw chat4000 sessions current         # current binding
-openclaw chat4000 sessions bind ...        # link a chat4000 group to a session
-openclaw chat4000 sessions clear ...       # remove a binding
-openclaw chat4000 telemetry status         # is anonymous error reporting on?
-openclaw chat4000 --help                   # full flag list
+openclaw chat4000 setup       # configure Matrix identity + pair a device
+openclaw chat4000 pair        # pair another device (prints code + QR)
+openclaw chat4000 status      # homeserver / user id / registrar / connection
+openclaw chat4000 migrate     # upgrade a v1 (relay) install to v2 (Matrix)
+openclaw chat4000 reset       # wipe local Matrix credentials + crypto state
+openclaw chat4000 sessions list                       # OpenClaw sessions to bind
+openclaw chat4000 sessions bind --room <!room:hs> --session-key <key>
+openclaw chat4000 sessions current --room <!room:hs>
+openclaw chat4000 sessions clear  --room <!room:hs>
+openclaw chat4000 telemetry status
+openclaw chat4000 --help
 ```
 
-### Upgrading
-
-```sh
-openclaw plugins install --force @chat4000/openclaw-plugin@latest
-openclaw gateway restart
-```
-
-`--force` is required because OpenClaw refuses to overwrite an existing plugin without
-it. The gateway must be restarted to load the new code.
-
-If you're in a container without systemd, restart manually:
-
-```sh
-pkill -9 -f openclaw
-nohup openclaw gateway run > /tmp/gw.out 2>&1 & disown
-```
-
-Since 1.1.5 the ack store auto-recovers from any stale `<account>.sqlite.lock/`
-directory left by a previously-killed gateway, so kill-and-restart is safe and
-no manual cleanup is needed.
-
-Pair with verbose logs:
-```sh
-openclaw chat4000 pair --pairing-log-level debug
-```
+Registrar URL + token come from `--registrar-url`/`--service-token`, config
+(`channels.chat4000.provisioning.{url,serviceToken}`), or env
+(`CHAT4000_REGISTRAR_URL`, `CHAT4000_SERVICE_TOKEN`). Identity can also come straight from
+env (`CHAT4000_HOMESERVER`, `CHAT4000_USER_ID`, `CHAT4000_ACCESS_TOKEN`, `CHAT4000_DEVICE_ID`).
 
 ---
 
-## 🆕 What's new in 1.4.0
+## 🧩 How it works (protocol §3–§5)
 
-**`openclaw chat4000 reset`** — destructive, no-confirm wipe of the per-account local state. Removes the group key file, the SQLite ack store (watermark + `processed_msg_ids` + `inner_acks`), and any orphaned `<db>.lock/` directory. After reset, `openclaw chat4000 setup` produces a fresh group key and re-pairs. Paired remote devices keep their old key — they need their own re-pair / app reinstall.
+```text
+  chat4000 iOS / macOS app
+        │  Matrix C-S (E2E encrypted), via the WS Gateway
+        ▼
+  Tuwunel homeserver ─────────── Registrar (accounts + pairing codes)
+        ▲
+        │  Matrix C-S (bot login, direct)
+  chat4000 OpenClaw plugin  ──  this package  ──  your OpenClaw agent
+```
 
-## What's new in 1.3.0
-
-**Streaming wire format fix (§6.4.2).** Prior versions reused `inner.id` across every `text_delta` and `text_end` frame in one stream. Per §6.6.9 receivers dedupe by `inner.id`, so reused ids caused only the first frame to render — a production failure observed 2026-05-06. Each streaming frame now carries:
-
-- a **fresh** `inner.id` (UUID v4 per frame), which makes outer `msg_id` unique per frame
-- the stable stream correlator in **`body.stream_id`** (shared across all frames of one logical reply)
-
-Old senders sent `{ "t":"text_delta", "id":"<reused-stream-id>", "body":{"delta":"..."} }`. New senders send `{ "t":"text_delta", "id":"<fresh-uuid>", "body":{"delta":"...","stream_id":"<stable-uuid>"} }`. Wire `version` stays at `1`. New apps fall back to `inner.id` when `body.stream_id` is missing, so old plugin + new app still works; **new plugin requires app builds that read `body.stream_id`**.
-
-## What's new in 1.2.0
-
-**`MessageTransport` facade.** All wire-protocol concerns (WebSocket, encryption, the §6.6 ack flow, sequence numbers, app-layer keepalive, reconnect, dedup) are now hidden behind a single `MessageTransport` interface. The agent-runner / channel layer calls only `send`, observes `onReceive` / `onStatus` / `onConnectionState`, and never sees `seq`, never opens a socket. The default impl `RelayMessageTransport` is interchangeable with `MockMessageTransport` for tests.
-
-**Inner-id idempotency (§6.6.9).** Inbound dedup is now keyed on the **inner** `msg_id`, not the outer relay-assigned `seq`. The persistent `processed_msg_ids` table survives plugin restarts: if the relay redrives a message we've already handed to the agent, the plugin re-emits the inner `received` ack (so the iPhone tick stays correct) and skips re-dispatching the prompt.
-
-**`StreamDispatcher` extraction.** The §6.4.2 streaming invariants — one `text_end` per `stream_id`, fresh `stream_id` after every `deliver(final)`, `text_end{reset:true}` on non-monotonic partial — live in a single class with direct unit tests. Pins the two production failure modes from 2026-05-05 (double-`text_end` and backwards-content `text_delta`).
-
-**No protocol change.** Wire format is still `version: 1`. This release is a code-organization refactor; pre-ack relays, ack-aware relays, and existing iPhone clients all continue to work unchanged.
-
-## What's new in 1.1.0
-
-**Reliable delivery** — the plugin implements protocol §6.6 acknowledgements end to end:
-
-- **Flow A (`recv_ack`)** — outer plaintext ack the relay uses to evict per-recipient queue entries. Cumulative `up_to_seq` plus optional out-of-order `ranges`. Flushed on 32 pending seqs, 50 ms idle, or clean shutdown.
-- **Flow B (inner `t: "ack"`)** — encrypted end-to-end receipt the originating app uses to flip its outbound message UI from "sent" to "delivered". Emitted as soon as the plugin decrypts and parses an inbound app `text`/`image`/`audio` — no waiting for the agent to start replying.
-- **Reconnect replay** — `hello.last_acked_seq` is read from a per-account SQLite store on every reconnect; the relay redrives only what we haven't durably acked.
-- **App-layer keepalive** — outer `ping` every 25 s of write-idle, distinct from the WebSocket frame keepalive; reconnect on missed `pong`.
-
-Pre-ack relays continue to work unchanged — no `recv_ack` is emitted, no inner `ack` is emitted, no behavior regression.
+- The plugin authenticates to the homeserver as a **bot account** and talks the Matrix
+  client-server API directly (the WS Gateway is for end-user devices).
+- Inbound room messages are decrypted and dispatched to your agent.
+- Replies stream back as a **single message that refines itself** via `m.replace` edits,
+  the final edit carrying the full text (protocol §5).
+- Pairing: the plugin picks a code → `POST /pair/register` (bearer `SERVICE_TOKEN`) → prints
+  the code + QR → polls `GET /pair/status` until the device redeems via `POST /pair/redeem`.
 
 ---
 
 ## 🔒 Security model
 
-- **End-to-end encrypted.** XChaCha20-Poly1305 with a 32-byte group key. The relay sees ciphertext only.
-- **Group key is the only durable secret** — stored at `~/.openclaw/plugins/chat4000/keys/<account>.json` with `0600` perms.
-- **Pairing** is a short low-entropy code with proof exchange that binds the code to the exact room participants.
-- **No plaintext logging.** Even at `debug` level, message bodies aren't written to disk.
-- **Relay is transport-only.** The relay never sees plaintext or routes by content — only by `group_id` (a SHA-256 of the group key).
-
----
-
-## 📊 Telemetry
-
-The plugin sends anonymous **error reports only** to help us fix bugs faster.
-
-**We collect:** crash reports & stack traces · plugin & Node.js version · OS platform/arch · anonymous install ID
-**We never collect:** message content · AI prompts/responses · CLI args · environment variables · file paths with your username · API keys · your name/email/system username · your IP
-
-```sh
-openclaw chat4000 telemetry status              # see current state
-openclaw chat4000 telemetry disable             # opt out persistently
-openclaw chat4000 --no-telemetry <command>      # opt out for one command
-export CHAT4000_TELEMETRY_DISABLED=1            # opt out via env
-```
-
-Privacy policy: <https://chat4000.com/privacy>
+- **End-to-end encrypted.** Olm/Megolm via matrix-js-sdk + Rust crypto; the homeserver and
+  every other service handle ciphertext only. The channel refuses to start if crypto can't
+  initialize.
+- **The bot's Matrix access token is the durable secret** — stored at
+  `~/.openclaw/plugins/chat4000/credentials/<account>.json` with `0600` perms (never written
+  into the OpenClaw config file).
+- **Pairing** uses one-time registrar codes, not a shared password.
 
 ---
 
@@ -147,54 +138,33 @@ Privacy policy: <https://chat4000.com/privacy>
 
 | Path | What |
 |---|---|
-| `~/.openclaw/plugins/chat4000/keys/<account>.json` | Group key (paired identity), `0600` |
-| `~/.openclaw/plugins/chat4000/instance.json` | Per-device id + display name |
-| `~/.openclaw/plugins/chat4000/session-bindings.json` | chat4000 group ↔ OpenClaw session links |
-| `~/.openclaw/plugins/chat4000/state/<account>.sqlite` | Ack watermark + inner-id dedupe (since 1.1.0; rekeyed to inner.id in 1.2.0), `0600` |
-| `~/.openclaw/plugins/chat4000/logs/runtime.log` | Connection & relay events |
-| `~/.openclaw/plugins/chat4000/logs/pairing.log` | Pairing protocol trace |
-| `~/.openclaw/plugins/chat4000/logs/errors.log` | Uncaught errors + stack traces |
+| `~/.openclaw/plugins/chat4000/credentials/<account>.json` | Matrix session (userId, accessToken, deviceId), `0600` |
+| `~/.openclaw/plugins/chat4000/instance/<account>.json` | Stable `plugin_id` (UUID), `0600` |
+| `~/.openclaw/plugins/chat4000/state/<account>/` | matrix-js-sdk sync store + Rust crypto store |
+| `~/.openclaw/plugins/chat4000/session-bindings.json` | Matrix room ↔ OpenClaw session links |
+| `~/.openclaw/plugins/chat4000/logs/runtime.log` | Connection & message events |
+| `~/Backups/openclaw-migrations/` | Pre-migration snapshots of v1 state |
 | `~/.config/chat4000/` | Telemetry config (`install-id`, `telemetry-enabled`) |
 
 ---
 
-## 🛰 Relay
+## 🆕 Migrating from v1
 
-Default relay endpoint (hard-coded, not configurable):
+v1 (custom relay) and v2 (Matrix) do not interoperate. To upgrade in place:
 
-- **WebSocket:** `wss://relay.chat4000.com/ws`
-- **Health:** `https://relay.chat4000.com/health`
-
----
-
-## 🧱 Repo layout
-
-```text
-chat4000-openclaw-plugin/
-├── src/
-│   ├── channel.ts              OpenClaw channel surface (config, gateway, outbound)
-│   ├── stream-dispatcher.ts    §6.4.2 streaming invariants (text_delta / text_end / reset)
-│   ├── transport/
-│   │   ├── index.ts            MessageTransport interface + types
-│   │   ├── relay.ts            RelayMessageTransport (default impl)
-│   │   ├── mock.ts             MockMessageTransport (tests)
-│   │   └── registry.ts         per-account transport registry
-│   ├── crypto.ts               XChaCha20-Poly1305 + X25519 pairing
-│   ├── pairing.ts              joiner + initiator pairing flows
-│   ├── ack-store.ts            SQLite watermark + processed_msg_ids dedup (§6.6 state)
-│   ├── recv-ack-batcher.ts     cumulative recv_ack emission (Flow A)
-│   ├── session-binding.ts      group ↔ session mapping
-│   ├── cli.ts                  openclaw chat4000 ... commands
-│   └── telemetry.ts            Sentry init + PII scrubbing
-├── tests/
-│   ├── unit/                   125+ unit tests
-│   └── contract/               relay protocol contract tests
-├── docker/                     dev compose stack (gateway + relay)
-├── scripts/
-│   └── publish_npm.py          build + publish pipeline
-├── openclaw.plugin.json        OpenClaw plugin manifest
-└── README.md
+```sh
+openclaw plugins install --force @chat4000/openclaw-plugin@latest
+openclaw chat4000 migrate --registrar-url https://registrar.chat4000.com --service-token <token>
+openclaw gateway restart
+openclaw chat4000 pair
 ```
+
+`migrate` snapshots your v1 state to `~/Backups/openclaw-migrations/` **before** changing
+anything, bootstraps a fresh Matrix identity via the registrar, and writes the v2 config.
+
+> **v1 message history cannot be carried over.** v1 encrypted everything under a single
+> group key; v2 uses Matrix's Megolm. Old history stays in the snapshot but won't appear in
+> the app. New messages flow normally after you pair a device.
 
 ---
 
@@ -202,40 +172,15 @@ chat4000-openclaw-plugin/
 
 ```sh
 npm install
-npm run build
-npm test                         # unit tests
-npm run test:contract            # contract tests (needs RELAY_BINARY)
-npm run test:all                 # both
+npm run build      # tsc type-check (the package ships .ts sources)
+npm test           # unit tests
 ```
-
-For a release build with Sentry telemetry baked in:
-
-```sh
-mkdir -p ~/.config/chat4000
-echo 'https://your-sentry-dsn' > ~/.config/chat4000/sentry-dsn
-npm run prepare-release
-npm run build
-```
-
-`prepare-release` writes `src/telemetry-dsn.generated.ts` (gitignored, included in the npm package).
-
----
-
-## 🤝 Contributing
-
-Contributions welcome. Open a PR against `main`.
-
-Talk to the team:
-- 📨 Telegram: <https://t.me/chat4000official>
-- 🌐 Web: <https://chat4000.com>
-- 📚 Docs: <https://chat4000.com/help>
 
 ---
 
 ## 📜 License
 
-chat4000-openclaw-plugin is licensed under the **GNU General Public License v3.0** (GPL-3.0). See [LICENSE](./LICENSE) for the full text.
+chat4000-openclaw-plugin is licensed under the **GNU General Public License v3.0** (GPL-3.0).
+See [LICENSE](./LICENSE). Copyright © 2026 NeonNode Limited.
 
-Copyright © 2026 NeonNode Limited. All rights reserved.
-
-**Commercial licensing:** if you want to use this plugin in a way GPL-3.0 doesn't allow (e.g. proprietary/closed-source distribution), contact <contact@chat4000.com>.
+**Commercial licensing:** contact <contact@chat4000.com>.

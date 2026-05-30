@@ -4,7 +4,7 @@
   "channelConfigs": {
     "chat4000": {
       "label": "chat4000",
-      "description": "Encrypted relay connection for paired chat4000 devices.",
+      "description": "Matrix (Tuwunel) connection for paired chat4000 devices.",
       "schema": {
         "type": "object",
         "additionalProperties": false,
@@ -13,19 +13,25 @@
           "pairingLogLevel": { "type": "string", "enum": ["info", "debug"] },
           "runtimeLogLevel": { "type": "string", "enum": ["info", "debug"] },
           "releaseChannel": { "type": "string" },
-          "groupKey": { "type": "string" },
-          "pairKey": { "type": "string" },
+          "env": { "type": "string", "enum": ["prod", "stage"] },
+          "homeserver": { "type": "string" },
+          "userId": { "type": "string" },
+          "accessToken": { "type": "string" },
+          "deviceId": { "type": "string" },
+          "provisioning": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "url": { "type": "string" },
+              "serviceToken": { "type": "string" }
+            }
+          },
           "defaultAccount": { "type": "string" },
-          "dmPolicy": {
-            "type": "string",
-            "enum": ["open", "pairing", "disabled"]
-          },
-          "allowFrom": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
+          "dmPolicy": { "type": "string", "enum": ["open", "pairing", "disabled"] },
+          "allowFrom": { "type": "array", "items": { "type": "string" } },
           "textChunkLimit": { "type": "integer" },
           "blockStreaming": { "type": "boolean" },
+          "initialSyncLimit": { "type": "integer" },
           "accounts": {
             "type": "object",
             "additionalProperties": {
@@ -36,18 +42,24 @@
                 "pairingLogLevel": { "type": "string", "enum": ["info", "debug"] },
                 "runtimeLogLevel": { "type": "string", "enum": ["info", "debug"] },
                 "releaseChannel": { "type": "string" },
-                "groupKey": { "type": "string" },
-                "pairKey": { "type": "string" },
-                "dmPolicy": {
-                  "type": "string",
-                  "enum": ["open", "pairing", "disabled"]
+                "env": { "type": "string", "enum": ["prod", "stage"] },
+                "homeserver": { "type": "string" },
+                "userId": { "type": "string" },
+                "accessToken": { "type": "string" },
+                "deviceId": { "type": "string" },
+                "provisioning": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "url": { "type": "string" },
+                    "serviceToken": { "type": "string" }
+                  }
                 },
-                "allowFrom": {
-                  "type": "array",
-                  "items": { "type": "string" }
-                },
+                "dmPolicy": { "type": "string", "enum": ["open", "pairing", "disabled"] },
+                "allowFrom": { "type": "array", "items": { "type": "string" } },
                 "textChunkLimit": { "type": "integer" },
-                "blockStreaming": { "type": "boolean" }
+                "blockStreaming": { "type": "boolean" },
+                "initialSyncLimit": { "type": "integer" }
               }
             }
           }
@@ -57,7 +69,13 @@
   },
   "channelEnvVars": {
     "chat4000": [
-      "CHAT4000_GROUP_KEY"
+      "CHAT4000_ENV",
+      "CHAT4000_HOMESERVER",
+      "CHAT4000_USER_ID",
+      "CHAT4000_ACCESS_TOKEN",
+      "CHAT4000_DEVICE_ID",
+      "CHAT4000_REGISTRAR_URL",
+      "CHAT4000_SERVICE_TOKEN"
     ]
   },
   "configSchema": {
