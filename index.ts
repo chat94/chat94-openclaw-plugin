@@ -8,6 +8,7 @@ initializeChat4000Telemetry();
 export { RegistrarClient, RegistrarError, generatePairingCode } from "./src/pairing/registrar.js";
 export { configureIdentity, selfRedeemIdentity } from "./src/pairing/bot-identity.js";
 export { createPairedRoom } from "./src/matrix/rooms.js";
+export { checkUpdatePreflight, formatPreflight } from "./src/update/preflight.js";
 export { startHumanPairing, buildQrUri } from "./src/pairing/qr.js";
 export { ENV_ENDPOINTS, resolveEnv, endpointsForEnv } from "./src/pairing/env.js";
 export {

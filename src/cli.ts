@@ -20,6 +20,7 @@ import {
 } from "./session-binding.js";
 import { detectV1State } from "./migration/detect.js";
 import { runChat4000Migration } from "./migration/migrate.js";
+import { checkUpdatePreflight, formatPreflight } from "./update/preflight.js";
 import { captureChat4000TestException, getTelemetryStatus, setTelemetryEnabled } from "./telemetry.js";
 
 type PluginApiLike = {
@@ -156,6 +157,15 @@ export function registerChat4000Cli(api: PluginApiLike): void {
         .option("--homeserver <url>", "Matrix homeserver URL (overrides env preset)")
         .action(async (opts: MigrateCommandOptions) => {
           await runMigrate(api, opts).catch(handleCliError);
+        });
+
+      chat4000
+        .command("update")
+        .description("Check whether the plugin can self-update (read-only preflight)")
+        .option("--check", "Only run the read-only preflight (default; no changes made)")
+        .option("--json", "Emit the preflight result as JSON")
+        .action(async (opts: { check?: boolean; json?: boolean }) => {
+          await runUpdateCheck(opts).catch(handleCliError);
         });
 
       chat4000
@@ -484,6 +494,20 @@ async function runMigrate(api: PluginApiLike, opts: MigrateCommandOptions): Prom
       });
     },
   });
+}
+
+async function runUpdateCheck(opts: { check?: boolean; json?: boolean }): Promise<void> {
+  // Only the read-only preflight is implemented today. `update` without flags
+  // behaves like `--check` (no changes), and warns that applying isn't wired yet.
+  const preflight = await checkUpdatePreflight();
+  if (opts.json) {
+    output.write(`${JSON.stringify(preflight, null, 2)}\n`);
+    return;
+  }
+  output.write(`${formatPreflight(preflight)}\n`);
+  if (!opts.check) {
+    output.write("\n(Applying an update is not wired yet — this is the preflight only.)\n");
+  }
 }
 
 function runReset(accountArg?: string): void {
