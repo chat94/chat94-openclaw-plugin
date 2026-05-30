@@ -20,6 +20,7 @@ import {
 } from "./session-binding.js";
 import { detectV1State } from "./migration/detect.js";
 import { runChat4000Migration } from "./migration/migrate.js";
+import { applyUpdate } from "./update/apply.js";
 import { checkUpdatePreflight, formatPreflight } from "./update/preflight.js";
 import { captureChat4000TestException, getTelemetryStatus, setTelemetryEnabled } from "./telemetry.js";
 
@@ -77,6 +78,15 @@ type SessionBindingOptions = {
   account?: string;
   room?: string;
   sessionKey?: string;
+};
+
+type UpdateCommandOptions = {
+  check?: boolean;
+  apply?: boolean;
+  restart?: boolean;
+  version?: string;
+  force?: boolean;
+  json?: boolean;
 };
 
 export function registerChat4000Cli(api: PluginApiLike): void {
@@ -161,11 +171,15 @@ export function registerChat4000Cli(api: PluginApiLike): void {
 
       chat4000
         .command("update")
-        .description("Check whether the plugin can self-update (read-only preflight)")
-        .option("--check", "Only run the read-only preflight (default; no changes made)")
-        .option("--json", "Emit the preflight result as JSON")
-        .action(async (opts: { check?: boolean; json?: boolean }) => {
-          await runUpdateCheck(opts).catch(handleCliError);
+        .description("Check for or apply a plugin self-update")
+        .option("--check", "Only run the read-only preflight (no changes made)")
+        .option("--apply", "Apply the update (install the latest version)")
+        .option("--restart", "Restart the gateway after applying so the new code loads")
+        .option("--version <v>", "Install this exact version instead of the latest")
+        .option("--force", "Apply even if the preflight reports a blocker")
+        .option("--json", "Emit the result as JSON")
+        .action(async (opts: UpdateCommandOptions) => {
+          await runUpdate(opts).catch(handleCliError);
         });
 
       chat4000
@@ -496,18 +510,42 @@ async function runMigrate(api: PluginApiLike, opts: MigrateCommandOptions): Prom
   });
 }
 
-async function runUpdateCheck(opts: { check?: boolean; json?: boolean }): Promise<void> {
-  // Only the read-only preflight is implemented today. `update` without flags
-  // behaves like `--check` (no changes), and warns that applying isn't wired yet.
-  const preflight = await checkUpdatePreflight();
-  if (opts.json) {
-    output.write(`${JSON.stringify(preflight, null, 2)}\n`);
+async function runUpdate(opts: UpdateCommandOptions): Promise<void> {
+  // Default (no --apply) is the read-only preflight.
+  if (!opts.apply) {
+    const preflight = await checkUpdatePreflight();
+    if (opts.json) {
+      output.write(`${JSON.stringify(preflight, null, 2)}\n`);
+      return;
+    }
+    output.write(`${formatPreflight(preflight)}\n`);
+    output.write('\nApply it with: "openclaw chat4000 update --apply --restart"\n');
     return;
   }
-  output.write(`${formatPreflight(preflight)}\n`);
-  if (!opts.check) {
-    output.write("\n(Applying an update is not wired yet — this is the preflight only.)\n");
+
+  const result = await applyUpdate({
+    targetVersion: opts.version?.trim() || undefined,
+    force: opts.force === true,
+    restart: opts.restart === true,
+    log: (line) => output.write(`${line}\n`),
+  });
+
+  if (opts.json) {
+    output.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
   }
+  output.write(
+    [
+      "",
+      result.ok ? "✓ update applied" : "✗ update not applied",
+      `  from: ${result.fromVersion}`,
+      `  to:   ${result.toVersion ?? "(unknown)"}`,
+      `  ${result.reason ?? ""}`,
+      ...(result.ok && !result.restartScheduled
+        ? ['  Restart the gateway to load it (or re-run with --restart).']
+        : []),
+    ].join("\n") + "\n",
+  );
 }
 
 function runReset(accountArg?: string): void {

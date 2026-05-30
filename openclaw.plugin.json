@@ -29,6 +29,7 @@
           "defaultAccount": { "type": "string" },
           "dmPolicy": { "type": "string", "enum": ["open", "pairing", "disabled"] },
           "allowFrom": { "type": "array", "items": { "type": "string" } },
+          "updateAllowFrom": { "type": "array", "items": { "type": "string" } },
           "textChunkLimit": { "type": "integer" },
           "blockStreaming": { "type": "boolean" },
           "initialSyncLimit": { "type": "integer" },
@@ -57,6 +58,7 @@
                 },
                 "dmPolicy": { "type": "string", "enum": ["open", "pairing", "disabled"] },
                 "allowFrom": { "type": "array", "items": { "type": "string" } },
+                "updateAllowFrom": { "type": "array", "items": { "type": "string" } },
                 "textChunkLimit": { "type": "integer" },
                 "blockStreaming": { "type": "boolean" },
                 "initialSyncLimit": { "type": "integer" }

@@ -28,7 +28,7 @@ import {
   SyncState,
 } from "matrix-js-sdk";
 import { ensureDir, resolveChat4000AccountStateDir } from "../paths.js";
-import { decodeInboundEvent } from "./inbound.js";
+import { decodeCommandEvent, decodeInboundEvent, type MatrixInboundCommand } from "./inbound.js";
 import type {
   MatrixConnectionState,
   MatrixCredentials,
@@ -42,6 +42,8 @@ export type MatrixClientHandleOptions = {
   abortSignal?: AbortSignal;
   onConnectionState?: (state: MatrixConnectionState) => void;
   onMessage?: (message: MatrixInboundMessage) => void;
+  /** chat4000.command control events (PROTOCOL §5). */
+  onCommand?: (command: MatrixInboundCommand) => void;
   log?: {
     info?: (msg: string) => void;
     warn?: (msg: string) => void;
@@ -145,6 +147,11 @@ export class MatrixClientHandle {
     if (event.getTs() < this.startedAtTs) return;
 
     const deliver = () => {
+      const command = decodeCommandEvent(event);
+      if (command) {
+        this.opts.onCommand?.(command);
+        return;
+      }
       const decoded = decodeInboundEvent(event);
       if (decoded) this.opts.onMessage?.(decoded);
     };

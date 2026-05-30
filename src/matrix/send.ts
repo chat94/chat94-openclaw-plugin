@@ -72,6 +72,27 @@ export async function editText(
   return res.event_id;
 }
 
+/**
+ * Send a `chat4000.command_result` reply into the control room (PROTOCOL §5).
+ * Carries `command` + `ok` and any extra result fields.
+ */
+export async function sendCommandResult(
+  client: MatrixClient,
+  roomId: string,
+  result: { command: string; ok: boolean; error?: string; data?: Record<string, unknown> },
+): Promise<string> {
+  const content: MatrixContent = {
+    msgtype: "chat4000.command_result",
+    body: `command ${result.command}: ${result.ok ? "ok" : `error: ${result.error ?? "failed"}`}`,
+    command: result.command,
+    ok: result.ok,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.data ?? {}),
+  };
+  const res = await client.sendEvent(roomId, EventType.RoomMessage, content as SendContent);
+  return res.event_id;
+}
+
 /** Send a typing indicator (ephemeral, best-effort). */
 export async function sendTyping(
   client: MatrixClient,

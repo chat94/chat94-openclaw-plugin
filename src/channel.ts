@@ -21,9 +21,11 @@ import {
 } from "./accounts.js";
 import { getHandle, registerHandle, unregisterHandle } from "./channel-runtime.js";
 import { MatrixClientHandle } from "./matrix/client.js";
-import { sendText as matrixSendText, sendTyping } from "./matrix/send.js";
+import type { MatrixInboundCommand } from "./matrix/inbound.js";
+import { sendCommandResult, sendText as matrixSendText, sendTyping } from "./matrix/send.js";
 import { MatrixDraftStream } from "./matrix/streaming.js";
 import type { MatrixInboundMessage } from "./matrix/types.js";
+import { handleControlCommand } from "./commands.js";
 import { RuntimeLogger } from "./runtime-logger.js";
 import { getChat4000SessionBinding } from "./session-binding.js";
 import type { ResolvedChat4000Account } from "./types.js";
@@ -182,6 +184,9 @@ export const chat4000Plugin = {
         onMessage: (message) => {
           void handleInbound({ message, handle, ctx, runtimeLogger });
         },
+        onCommand: (command) => {
+          void handleCommand({ command, handle, ctx, runtimeLogger });
+        },
       });
 
       registerHandle(ctx.account.accountId, handle);
@@ -266,6 +271,40 @@ type InboundCtx = {
     debug?: (msg: string) => void;
   };
 };
+
+async function handleCommand(params: {
+  command: MatrixInboundCommand;
+  handle: MatrixClientHandle;
+  ctx: InboundCtx;
+  runtimeLogger: RuntimeLogger;
+}): Promise<void> {
+  const { command, handle, ctx, runtimeLogger } = params;
+  runtimeLogger.info("runtime.command_recv", {
+    msg_id: command.eventId,
+    command: command.command,
+    sender: command.senderId,
+  });
+  const result = await handleControlCommand(
+    { command: command.command, args: command.args, senderId: command.senderId },
+    {
+      updateAllowFrom: ctx.account.config.updateAllowFrom ?? [],
+      log: (line) => runtimeLogger.info("runtime.command_log", { detail: line }),
+    },
+  );
+  try {
+    await sendCommandResult(handle.client, command.roomId, result);
+  } catch (err) {
+    runtimeLogger.info("runtime.command_reply_error", {
+      msg_id: command.eventId,
+      error: String(err),
+    });
+  }
+  runtimeLogger.info("runtime.command_done", {
+    msg_id: command.eventId,
+    command: command.command,
+    ok: result.ok,
+  });
+}
 
 async function handleInbound(params: {
   message: MatrixInboundMessage;

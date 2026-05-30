@@ -22,6 +22,8 @@ export type Chat4000AccountConfig = {
   provisioning?: Chat4000ProvisioningConfig;
   dmPolicy?: "open" | "pairing" | "disabled";
   allowFrom?: string[];
+  /** Matrix user ids allowed to trigger plugin.update over the control room. */
+  updateAllowFrom?: string[];
   textChunkLimit?: number;
   blockStreaming?: boolean;
   initialSyncLimit?: number;

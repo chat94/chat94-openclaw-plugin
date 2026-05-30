@@ -84,6 +84,8 @@ openclaw chat4000 setup       # configure Matrix identity + pair a device
 openclaw chat4000 pair        # pair another device (prints code + QR)
 openclaw chat4000 status      # homeserver / user id / registrar / connection
 openclaw chat4000 migrate     # upgrade a v1 (relay) install to v2 (Matrix)
+openclaw chat4000 update             # preflight: can the plugin self-update?
+openclaw chat4000 update --apply --restart   # install latest + restart gateway
 openclaw chat4000 reset       # wipe local Matrix credentials + crypto state
 openclaw chat4000 sessions list                       # OpenClaw sessions to bind
 openclaw chat4000 sessions bind --room <!room:hs> --session-key <key>
@@ -119,6 +121,37 @@ env (`CHAT4000_HOMESERVER`, `CHAT4000_USER_ID`, `CHAT4000_ACCESS_TOKEN`, `CHAT40
   the final edit carrying the full text (protocol §5).
 - Pairing: the plugin picks a code → `POST /pair/register` (bearer `SERVICE_TOKEN`) → prints
   the code + QR → polls `GET /pair/status` until the device redeems via `POST /pair/redeem`.
+
+---
+
+## 🔁 Self-update
+
+The plugin can update itself (protocol §5):
+
+```sh
+openclaw chat4000 update                       # read-only preflight (no changes)
+openclaw chat4000 update --apply               # install latest (restart manually)
+openclaw chat4000 update --apply --restart     # install + restart the gateway
+openclaw chat4000 update --apply --version 2.1.0   # pin an exact version
+```
+
+The preflight checks: newer version published, install dir writable, gateway
+restart method (docker / supervised / foreground), npm reachable. `--apply`
+proceeds only when the preflight is green (use `--force` to override).
+
+**Remote (client-triggered) update.** A paired device can send a
+`chat4000.command` of `plugin.update_check` (read-only) or `plugin.update` into
+the control room. `plugin.update` is **owner-gated**: only Matrix user ids listed
+in `channels.chat4000.updateAllowFrom` may trigger it — if that list is empty,
+remote updates are denied. Example config:
+
+```jsonc
+"channels": { "chat4000": { "updateAllowFrom": ["@u_owner:chat4000.com"] } }
+```
+
+> Restarting the gateway from inside it uses a detached helper; on locked-down
+> installs (read-only plugin dir, no restart permission) the preflight reports it
+> as blocked rather than half-applying.
 
 ---
 

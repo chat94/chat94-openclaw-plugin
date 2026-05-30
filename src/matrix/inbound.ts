@@ -1,19 +1,58 @@
 /**
- * Decode a Matrix timeline event into a chat4000 inbound message.
+ * Decode a Matrix timeline event into a chat4000 inbound message or command.
  *
- * Only final, non-edit `m.room.message` events of type text/image/audio are
- * surfaced; edits (m.replace), reactions, state events, and our own draft
- * previews are ignored. Media byte download is a follow-up — for now media
- * events surface a text placeholder so the agent still gets a turn.
+ * Final, non-edit `m.room.message` events of type text/image/audio become
+ * inbound messages for the agent. Events with `msgtype: "chat4000.command"`
+ * (PROTOCOL §5) become control commands handled by the plugin, not the agent.
+ * Edits (m.replace), reactions, state events, and our own output are ignored.
  */
 import { EventType, type MatrixEvent, MsgType, RelationType } from "matrix-js-sdk";
 import type { MatrixInboundMessage } from "./types.js";
+
+export type MatrixInboundCommand = {
+  kind: "command";
+  eventId: string;
+  roomId: string;
+  senderId: string;
+  command: string;
+  args: Record<string, unknown>;
+  ts: number;
+};
+
+/** chat4000 control-command msgtype (PROTOCOL §5). */
+export const COMMAND_MSGTYPE = "chat4000.command";
+/** chat4000 command-result msgtype the plugin replies with. */
+export const COMMAND_RESULT_MSGTYPE = "chat4000.command_result";
+
+export function decodeCommandEvent(event: MatrixEvent): MatrixInboundCommand | null {
+  if (event.getType() !== EventType.RoomMessage) return null;
+  if (event.isRedacted()) return null;
+  const content = event.getContent();
+  if (content.msgtype !== COMMAND_MSGTYPE) return null;
+  const command = typeof content.command === "string" ? content.command : "";
+  const eventId = event.getId();
+  const roomId = event.getRoomId();
+  const senderId = event.getSender();
+  if (!command || !eventId || !roomId || !senderId) return null;
+  return {
+    kind: "command",
+    eventId,
+    roomId,
+    senderId,
+    command,
+    args: content as Record<string, unknown>,
+    ts: event.getTs(),
+  };
+}
 
 export function decodeInboundEvent(event: MatrixEvent): MatrixInboundMessage | null {
   if (event.getType() !== EventType.RoomMessage) return null;
   if (event.isRedacted()) return null;
 
   const content = event.getContent();
+
+  // Commands are handled separately, never as agent prompts.
+  if (content.msgtype === COMMAND_MSGTYPE) return null;
 
   // Skip edits — the original event already lives in the timeline; we only act
   // on first-class incoming messages.

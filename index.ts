@@ -9,6 +9,8 @@ export { RegistrarClient, RegistrarError, generatePairingCode } from "./src/pair
 export { configureIdentity, selfRedeemIdentity } from "./src/pairing/bot-identity.js";
 export { createPairedRoom } from "./src/matrix/rooms.js";
 export { checkUpdatePreflight, formatPreflight } from "./src/update/preflight.js";
+export { applyUpdate, rollbackTo } from "./src/update/apply.js";
+export { handleControlCommand, SUPPORTED_COMMANDS } from "./src/commands.js";
 export { startHumanPairing, buildQrUri } from "./src/pairing/qr.js";
 export { ENV_ENDPOINTS, resolveEnv, endpointsForEnv } from "./src/pairing/env.js";
 export {
