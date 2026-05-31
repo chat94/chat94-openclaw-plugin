@@ -141,13 +141,10 @@ proceeds only when the preflight is green (use `--force` to override).
 
 **Remote (client-triggered) update.** A paired device can send a
 `chat4000.command` of `plugin.update_check` (read-only) or `plugin.update` into
-the control room. `plugin.update` is **owner-gated**: only Matrix user ids listed
-in `channels.chat4000.updateAllowFrom` may trigger it — if that list is empty,
-remote updates are denied. Example config:
-
-```jsonc
-"channels": { "chat4000": { "updateAllowFrom": ["@u_owner:chat4000.com"] } }
-```
+the control room. The gate is **control-room membership**: the plugin only acts
+on commands that arrive in its own control room (a room tagged
+`chat4000.room_kind: control`), and the plugin controls who it invites there. Any
+member of the control room may trigger an update.
 
 > Restarting the gateway from inside it uses a detached helper; on locked-down
 > installs (read-only plugin dir, no restart permission) the preflight reports it

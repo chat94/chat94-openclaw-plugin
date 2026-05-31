@@ -34,6 +34,18 @@ export type PairStatusResult = {
   userId?: string;
 };
 
+export type VersionAction = "ok" | "recommend_upgrade" | "force_upgrade";
+
+/** Version-policy verdict for this plugin (PROTOCOL C.5). */
+export type VersionPolicyResult = {
+  action: VersionAction;
+  minVersion: string | null;
+  minNag: string | null;
+  recommended: string | null;
+  currentTermsVersion: number;
+  message: string | null;
+};
+
 export class RegistrarError extends Error {
   constructor(
     message: string,
@@ -123,6 +135,41 @@ export class RegistrarClient {
     };
   }
 
+  /**
+   * Check the version policy for this caller (PROTOCOL C.5.1). PUBLIC endpoint —
+   * version policy is not secret and one endpoint serves apps + plugins, so it
+   * carries no service token. The registrar semver-compares and returns the verdict.
+   */
+  async checkVersion(params: {
+    appId: string;
+    clientVersion: string;
+    releaseChannel: string;
+    platform?: string;
+  }): Promise<VersionPolicyResult> {
+    const body = (await this.request("POST", "/version", {
+      auth: false,
+      body: {
+        app_id: params.appId,
+        client_version: params.clientVersion,
+        release_channel: params.releaseChannel,
+        platform: params.platform,
+      },
+    })) as Record<string, unknown>;
+    const action =
+      body.action === "force_upgrade" || body.action === "recommend_upgrade"
+        ? body.action
+        : "ok";
+    return {
+      action,
+      minVersion: typeof body.min_version === "string" ? body.min_version : null,
+      minNag: typeof body.min_nag === "string" ? body.min_nag : null,
+      recommended: typeof body.recommended === "string" ? body.recommended : null,
+      currentTermsVersion:
+        typeof body.current_terms_version === "number" ? body.current_terms_version : 0,
+      message: typeof body.message === "string" ? body.message : null,
+    };
+  }
+
   /** Poll pairing completion (plugin → registrar). */
   async getPairingStatus(code: string): Promise<PairStatusResult> {
     const body = (await this.request("GET", `/pair/status?code=${encodeURIComponent(code)}`, {
@@ -178,10 +225,16 @@ function safeJsonParse(text: string): unknown {
   }
 }
 
-/** Generate a pairing code (URL-safe, within the §3.1 6–128 char bound). */
-export function generatePairingCode(bytes = 18): string {
+/**
+ * Generate a pairing code: **exactly 6 uniformly-random digits** (PROTOCOL C.1/C.2).
+ * The registrar rejects anything that isn't 6 digits. `randomInt` is CSPRNG-backed
+ * and unbiased (rejection-sampled internally), so there is no modulo skew.
+ */
+export function generatePairingCode(): string {
   // Node crypto without importing at module top to keep this tree-shake friendly.
   // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
-  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
-  return randomBytes(bytes).toString("base64url");
+  const { randomInt } = require("node:crypto") as typeof import("node:crypto");
+  let code = "";
+  for (let i = 0; i < 6; i += 1) code += String(randomInt(10));
+  return code;
 }

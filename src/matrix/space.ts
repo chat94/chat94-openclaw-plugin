@@ -1,0 +1,187 @@
+/**
+ * The plugin's space + control room + session rooms (PROTOCOL E).
+ *
+ * A plugin is one `m.space`; under it sit exactly one **control** room (where the
+ * device issues `session.*` / `plugin.*` commands) and N **session** rooms (one
+ * conversation each). Every room the plugin creates carries a `chat4000.room_kind`
+ * state event so the app can classify it; the control room also carries an
+ * `m.room.name`. Rooms are linked to the space with `m.space.child` / `m.space.parent`.
+ *
+ * Creation is idempotent: the resolved {spaceId, controlRoomId} are persisted per
+ * account, and re-verified against the synced state before reuse, so a restart
+ * never spawns duplicates.
+ */
+import {
+  type ICreateRoomOpts,
+  type MatrixClient,
+  Preset,
+  Visibility,
+} from "matrix-js-sdk";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { resolveChat4000AccountStateDir } from "../paths.js";
+import { ROOM_KIND_STATE_EVENT } from "./inbound.js";
+
+const ROOM_ENCRYPTION = "m.room.encryption";
+const SPACE_CHILD = "m.space.child";
+const SPACE_PARENT = "m.space.parent";
+const ROOM_NAME = "m.room.name";
+
+export type PluginRooms = {
+  spaceId: string;
+  controlRoomId: string;
+};
+
+function roomsFile(accountId: string): string {
+  return path.join(resolveChat4000AccountStateDir(accountId), "rooms.json");
+}
+
+/** Read the persisted {spaceId, controlRoomId} for an account (may be partial). */
+export function readPluginRooms(accountId: string): Partial<PluginRooms> {
+  const file = roomsFile(accountId);
+  if (!existsSync(file)) return {};
+  try {
+    return JSON.parse(readFileSync(file, "utf8")) as Partial<PluginRooms>;
+  } catch {
+    return {};
+  }
+}
+
+function saveRooms(accountId: string, rooms: PluginRooms): void {
+  const file = roomsFile(accountId);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify(rooms, null, 2)}\n`, "utf8");
+}
+
+function serverNameOf(userId: string): string {
+  return userId.split(":")[1] ?? "";
+}
+
+/**
+ * Send a state event. matrix-js-sdk's `sendStateEvent` type only allows known
+ * event types; we use custom ones (m.space.child/parent, room_kind), so we cast
+ * at the call boundary (same pattern as send.ts).
+ */
+function sendState(
+  client: MatrixClient,
+  roomId: string,
+  type: string,
+  content: Record<string, unknown>,
+  stateKey: string,
+): Promise<unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (client.sendStateEvent as any)(roomId, type, content, stateKey);
+}
+
+/** True if the client is joined to a room with this id (per synced state). */
+function isJoined(client: MatrixClient, roomId: string | undefined): boolean {
+  if (!roomId) return false;
+  const room = client.getRoom(roomId);
+  return Boolean(room && room.getMyMembership() === "join");
+}
+
+function encryptionState(): NonNullable<ICreateRoomOpts["initial_state"]>[number] {
+  return { type: ROOM_ENCRYPTION, state_key: "", content: { algorithm: "m.megolm.v1.aes-sha2" } };
+}
+
+function roomKindState(
+  kind: "control" | "session",
+): NonNullable<ICreateRoomOpts["initial_state"]>[number] {
+  return { type: ROOM_KIND_STATE_EVENT, state_key: "", content: { kind } };
+}
+
+/** Link a child room under the space (both directions). */
+async function linkChild(client: MatrixClient, spaceId: string, childRoomId: string): Promise<void> {
+  const via = [serverNameOf(client.getUserId() ?? "")].filter(Boolean);
+  await sendState(client, spaceId, SPACE_CHILD, { via }, childRoomId);
+  await sendState(client, childRoomId, SPACE_PARENT, { via, canonical: true }, spaceId);
+}
+
+/**
+ * Ensure the plugin's space and its single control room exist; create them on
+ * first run. Idempotent — reuses persisted ids when still joined.
+ */
+export async function ensurePluginRooms(
+  client: MatrixClient,
+  params: { accountId: string; pluginName: string },
+): Promise<PluginRooms> {
+  const stored = readPluginRooms(params.accountId);
+
+  let spaceId = isJoined(client, stored.spaceId) ? stored.spaceId : undefined;
+  if (!spaceId) {
+    const res = await client.createRoom({
+      name: params.pluginName,
+      preset: Preset.PrivateChat,
+      visibility: Visibility.Private,
+      creation_content: { type: "m.space" },
+    });
+    spaceId = res.room_id;
+  }
+
+  let controlRoomId = isJoined(client, stored.controlRoomId) ? stored.controlRoomId : undefined;
+  if (!controlRoomId) {
+    const res = await client.createRoom({
+      name: "Commands",
+      preset: Preset.TrustedPrivateChat,
+      visibility: Visibility.Private,
+      initial_state: [encryptionState(), roomKindState("control")],
+    });
+    controlRoomId = res.room_id;
+    await linkChild(client, spaceId, controlRoomId);
+  }
+
+  const rooms: PluginRooms = { spaceId, controlRoomId };
+  saveRooms(params.accountId, rooms);
+  return rooms;
+}
+
+/**
+ * Create a new encrypted session room under the space, optionally inviting a
+ * user. Returns the new room id (PROTOCOL E `session.new`).
+ */
+export async function createSessionRoom(
+  client: MatrixClient,
+  params: { spaceId: string; title?: string; inviteUserId?: string },
+): Promise<string> {
+  const res = await client.createRoom({
+    name: params.title || "chat4000 session",
+    preset: Preset.TrustedPrivateChat,
+    visibility: Visibility.Private,
+    ...(params.inviteUserId ? { invite: [params.inviteUserId] } : {}),
+    initial_state: [encryptionState(), roomKindState("session")],
+  });
+  await linkChild(client, params.spaceId, res.room_id);
+  return res.room_id;
+}
+
+/** Invite a paired user into the control room AND the space (PROTOCOL E). */
+export async function inviteToControlAndSpace(
+  client: MatrixClient,
+  params: { spaceId: string; controlRoomId: string; userId: string },
+): Promise<void> {
+  await client.invite(params.controlRoomId, params.userId);
+  await client.invite(params.spaceId, params.userId);
+}
+
+/** Rename a session room (`session.rename`). */
+export async function renameRoom(
+  client: MatrixClient,
+  roomId: string,
+  title: string,
+): Promise<void> {
+  await sendState(client, roomId, ROOM_NAME, { name: title }, "");
+}
+
+/**
+ * Archive a session room (`session.archive`): drop it from the space so the app
+ * stops listing it under the plugin. The room itself is left intact (history is
+ * not destroyed).
+ */
+export async function archiveRoom(
+  client: MatrixClient,
+  spaceId: string,
+  roomId: string,
+): Promise<void> {
+  // Empty m.space.child content removes the child link.
+  await sendState(client, spaceId, SPACE_CHILD, {}, roomId);
+}

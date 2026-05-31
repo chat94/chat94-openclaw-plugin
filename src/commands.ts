@@ -1,16 +1,17 @@
 /**
- * Control-room command handler (PROTOCOL §5).
+ * Control-room command handler (PROTOCOL E).
  *
  * The device sends `{ msgtype: "chat4000.command", command, ... }` into the
  * per-plugin control room; the plugin replies `chat4000.command_result`. This
  * module owns the chat4000-specific commands the plugin understands. Unknown
- * commands are answered with `ok:false, error:"unknown command"` (and the
- * channel ignores non-command events), per §8 (ignore what you don't understand).
+ * commands are answered with `ok:false, error:"unknown command"`, per section I
+ * (ignore what you don't understand).
  *
- * Update commands are **owner-gated**: only Matrix user ids in
- * `channels.chat4000.updateAllowFrom` may trigger them. If the allowlist is
- * empty/unset, update commands are DENIED (safe default) — a stranger in a room
- * must never be able to force-update your agent.
+ * Authorization is **control-room membership** — the gate is "is this event in
+ * the plugin's control room?", enforced before this handler runs (the Matrix
+ * client only forwards commands from a room tagged `chat4000.room_kind: control`,
+ * and the plugin owns who it invites there). Any member of the control room may
+ * run any command, including `plugin.update` (PROTOCOL E + operator decision).
  */
 import { applyUpdate } from "./update/apply.js";
 import { checkUpdatePreflight } from "./update/preflight.js";
@@ -31,16 +32,8 @@ export type CommandResult = {
 };
 
 export type CommandContext = {
-  /** Matrix user ids allowed to run update commands. Empty ⇒ updates denied. */
-  updateAllowFrom: string[];
   log?: (line: string) => void;
 };
-
-function isOwner(senderId: string, allow: string[]): boolean {
-  if (allow.length === 0) return false;
-  const s = senderId.trim().toLowerCase();
-  return allow.some((a) => a.trim().toLowerCase() === s);
-}
 
 /**
  * Handle a single control command. Returns the result to send back as a
@@ -69,16 +62,6 @@ export async function handleControlCommand(
       }
 
       case "plugin.update": {
-        if (!isOwner(cmd.senderId, ctx.updateAllowFrom)) {
-          return {
-            command: cmd.command,
-            ok: false,
-            error:
-              ctx.updateAllowFrom.length === 0
-                ? "update denied: no updateAllowFrom configured (set channels.chat4000.updateAllowFrom)"
-                : `update denied: ${cmd.senderId} is not in updateAllowFrom`,
-          };
-        }
         const targetVersion =
           typeof cmd.args.version === "string" && cmd.args.version.trim()
             ? cmd.args.version.trim()

@@ -19,10 +19,12 @@ export type MatrixInboundCommand = {
   ts: number;
 };
 
-/** chat4000 control-command msgtype (PROTOCOL §5). */
+/** chat4000 control-command msgtype (PROTOCOL E). */
 export const COMMAND_MSGTYPE = "chat4000.command";
 /** chat4000 command-result msgtype the plugin replies with. */
 export const COMMAND_RESULT_MSGTYPE = "chat4000.command_result";
+/** Room-kind state event type, state_key "" (PROTOCOL E). `kind`: control|session. */
+export const ROOM_KIND_STATE_EVENT = "chat4000.room_kind";
 
 export function decodeCommandEvent(event: MatrixEvent): MatrixInboundCommand | null {
   if (event.getType() !== EventType.RoomMessage) return null;
@@ -80,11 +82,19 @@ export function decodeInboundEvent(event: MatrixEvent): MatrixInboundMessage | n
   }
 
   if (msgtype === MsgType.Image || msgtype === MsgType.Audio) {
-    // Full media transport (mxc download + decrypt + base64) is a follow-up;
-    // surface a placeholder so the agent still receives the turn.
+    // Carry the raw content; the channel downloads + decrypts it over the HTTP
+    // media path and offloads it to the OpenClaw media store (PROTOCOL D.3).
     const filename = typeof content.body === "string" ? content.body : "attachment";
     const label = msgtype === MsgType.Image ? "Image" : "Voice note";
-    return { ...base, body: { kind: "text", text: `[${label}: ${filename}]` } };
+    return {
+      ...base,
+      body: {
+        kind: "media",
+        mediaMsgType: msgtype === MsgType.Image ? "m.image" : "m.audio",
+        rawContent: content as Record<string, unknown>,
+        caption: `[${label}: ${filename}]`,
+      },
+    };
   }
 
   return null;

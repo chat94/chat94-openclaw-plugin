@@ -12,14 +12,16 @@
  * Honest limits:
  *   - The running process keeps the OLD code until the gateway restarts; "apply
  *     without restart" stages the new version on disk for the next boot.
- *   - Auto-rollback across a restart is not possible from inside the process.
- *     `rollbackTo()` is provided to reinstall a pinned previous version; the
- *     caller decides when to use it (e.g. after a failed boot, run externally).
+ *   - Auto-rollback IS handled across a restart: when a restart is scheduled we
+ *     drop a boot marker (boot-guard.ts); the next boot watches the new version
+ *     and, if it never confirms healthy, reinstalls the previous pinned version.
+ *     `rollbackTo()` remains for an explicit manual revert.
  */
 import { execFile } from "node:child_process";
 import { spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { readPackageName } from "../package-info.js";
+import { writeUpdateMarker } from "./boot-guard.js";
 import { checkUpdatePreflight, type RestartMethod, type UpdatePreflight } from "./preflight.js";
 
 const run = promisify(execFile);
@@ -170,11 +172,21 @@ export async function applyUpdate(opts: ApplyUpdateOptions = {}): Promise<ApplyU
 
   let restartScheduled = false;
   if (opts.restart) {
+    // Drop the boot marker BEFORE the restart fires so the next boot can guard
+    // the new version and auto-roll-back if it fails to come up (boot-guard.ts).
+    writeUpdateMarker(preflight.currentVersion, target);
     restartScheduled = scheduleRestart(
       preflight.restartMethod,
       opts.restartDelaySeconds ?? 3,
       log,
     );
+    if (!restartScheduled) {
+      // No restart actually scheduled — don't leave a marker that would later
+      // mis-fire a rollback.
+      // (clearUpdateMarker is cheap and idempotent.)
+      const { clearUpdateMarker } = await import("./boot-guard.js");
+      clearUpdateMarker();
+    }
   }
 
   return {

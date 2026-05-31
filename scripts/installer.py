@@ -226,6 +226,10 @@ def _emit(event: str, props: Optional[dict] = None) -> None:
         pass
     if props:
         enriched.update(props)
+    # Privacy: the docstring + README promise telemetry carries "no file paths with
+    # your username". Tokens are redacted above; scrub home-dir/username paths from
+    # EVERY string prop (e.g. openclaw_path, flags) so that promise actually holds.
+    enriched = {k: _scrub_props_value(v) for k, v in enriched.items()}
     body = json.dumps({
         "api_key": POSTHOG_API_KEY,
         "event": event,
@@ -254,7 +258,18 @@ def _scrub_path(s: str) -> str:
     if home and home in s:
         s = s.replace(home, "~")
     import re as _re
-    return _re.sub(r"/(Users|home)/[^/]+", r"/\\1/<user>", s)
+    return _re.sub(r"/(Users|home)/[^/]+", r"/\1/<user>", s)
+
+
+def _scrub_props_value(v):
+    """Recursively scrub username/home paths out of a telemetry prop value."""
+    if isinstance(v, str):
+        return _scrub_path(v)
+    if isinstance(v, list):
+        return [_scrub_props_value(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _scrub_props_value(x) for k, x in v.items()}
+    return v
 
 
 def _scrub_secrets(s: str) -> str:
@@ -592,6 +607,10 @@ def main() -> int:
                             "directly. PATH should be the full path to the openclaw "
                             "executable (e.g. /opt/homebrew/bin/openclaw)."
                         ))
+    parser.add_argument("--env", default=None, metavar="NAME",
+                        help="backend environment: prod | stage")
+    parser.add_argument("--service-token", default=None, metavar="TOKEN",
+                        help="registrar SERVICE_TOKEN used to self-onboard the bot identity")
     args = parser.parse_args()
 
     banner()
@@ -715,37 +734,45 @@ def main() -> int:
     ok("Plugin installed.")
     _emit("installer_pkg_installed", {"plugin_package": NPM_PACKAGE})
 
-    # 4. Pair --------------------------------------------------------------
-    # Pair runs BEFORE the gateway restart. Pair talks to the relay
-    # directly (no gateway needed) and mints the key + writes the
-    # channels.chat4000 config. The subsequent gateway (re)start picks
-    # up both atomically: it boots with the chat4000 channel marked
-    # configured, loads the adapter, and connects to the relay. Doing
-    # this in the reverse order (gw → pair) doesn't work because the
-    # gateway only loads channel adapters at boot — its config-watcher
-    # reload doesn't promote a never-loaded channel from
-    # configured:no → running.
+    # 4. Onboard identity + pair (v2 / Matrix) -----------------------------
+    # The plugin self-onboards a bot identity via the registrar (a
+    # kind=plugin pairing code), then invites the paired device.
+    # `chat4000 setup --self-redeem` does both: it provisions the bot's
+    # Matrix login and (unless --no-pair) runs device pairing, writing the
+    # channels.chat4000 config. This MUST run before the gateway start —
+    # the gateway only loads channel adapters at boot, so the channel has
+    # to be configured first.
+    setup_cmd = [openclaw_path, "chat4000", "setup", "--self-redeem"]
+    if args.env:
+        setup_cmd += ["--env", args.env]
+    if args.service_token:
+        setup_cmd += ["--service-token", args.service_token]
     if args.no_pair:
-        warn("Skipping pair (--no-pair). When ready, run:")
-        print(f"  {C_CYN}{openclaw_path} chat4000 pair{C_RST}")
-        print(f"  {C_CYN}{openclaw_path} gateway run    # in a separate terminal{C_RST}")
-        return 0
-
-    hdr("📱 Pairing a device")
-    print(f"{C_DIM}Scan the QR with the chat4000 iOS/macOS app, or paste the code into the CLI client.{C_RST}")
-    print(f"{C_DIM}Press Ctrl-C any time to cancel.{C_RST}\n")
-    _emit("installer_handing_off_to_pair")
+        setup_cmd.append("--no-pair")
+        hdr("🔑 Onboarding the plugin's Matrix identity")
+        _emit("installer_handing_off_to_setup", {"paired": False})
+    else:
+        hdr("📱 Onboarding + pairing a device")
+        print(f"{C_DIM}Scan the QR with the chat4000 iOS/macOS app.{C_RST}")
+        print(f"{C_DIM}Press Ctrl-C any time to cancel.{C_RST}\n")
+        _emit("installer_handing_off_to_setup", {"paired": True})
     try:
-        pair_rc = subprocess.run([openclaw_path, "chat4000", "pair"]).returncode
+        pair_rc = subprocess.run(setup_cmd).returncode
     except KeyboardInterrupt:
-        warn("Pairing cancelled.")
-        _emit("installer_cancelled", {"stage": "pair"})
+        warn("Onboarding cancelled.")
+        _emit("installer_cancelled", {"stage": "setup"})
         return 130
     if pair_rc != 0:
-        err(f"Pairing exited {pair_rc}.")
-        _emit("installer_failed", {"stage": "pair", "exit_code": pair_rc})
+        err(f"Setup exited {pair_rc}.")
+        err("If this is a token error, pass --service-token <TOKEN> (or set CHAT4000_SERVICE_TOKEN),")
+        err("and select your backend with --env prod|stage.")
+        _emit("installer_failed", {"stage": "setup", "exit_code": pair_rc})
         return pair_rc
-    _emit("pairing_completed_via_installer", {})
+    if args.no_pair:
+        ok("Identity onboarded. Pair a device any time with:")
+        print(f"  {C_CYN}{openclaw_path} chat4000 pair{C_RST}")
+    else:
+        _emit("pairing_completed_via_installer", {})
 
     # 5. (Re)start gateway — now chat4000 has a key + config ----------------
     if args.no_restart:
@@ -778,10 +805,10 @@ def main() -> int:
     # delay (or worse, exits before the connection lands and sees only
     # 1 tick on their first message).
     print(f"{C_DIM}This can take a couple of minutes on first install while OpenClaw{C_RST}")
-    print(f"{C_DIM}loads plugins and the chat4000 channel handshakes with the relay.{C_RST}")
+    print(f"{C_DIM}loads plugins and the chat4000 channel connects through the gateway.{C_RST}")
     print(f"{C_DIM}Grab a coffee — we'll let you know the moment it's ready.{C_RST}")
     if wait_for_chat4000_connected(timeout=120):
-        ok("chat4000 connected to relay. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
+        ok("chat4000 connected. Send a message from your iOS/Mac app — your OpenClaw agent will reply.")
         _emit("installer_succeeded", {})
         _emit("installer_chat4000_relay_connected", {})
         return 0
@@ -842,7 +869,7 @@ def wait_for_chat4000_connected(timeout: float = 120.0) -> bool:
                 if "[chat4000]" in gw and "Starting chat4000" in gw:
                     status = "chat4000 channel starting"
                 if runtime_log.exists():
-                    status = "chat4000 connecting to relay"
+                    status = "chat4000 connecting to gateway"
             except Exception:
                 pass
 

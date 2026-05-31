@@ -14,15 +14,21 @@ export function loadMatrixCredentials(accountId: string): MatrixCredentials | nu
   const file = resolveChat4000CredentialsPath(accountId);
   if (!existsSync(file)) return null;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<MatrixCredentials>;
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<MatrixCredentials> & {
+      homeserver?: string;
+    };
+    // `gatewayUrl` is the v2 field; fall back to a legacy `homeserver` value so an
+    // older creds file still loads (the value is the connection URL either way).
+    const gatewayUrl =
+      typeof parsed.gatewayUrl === "string" ? parsed.gatewayUrl : parsed.homeserver;
     if (
-      typeof parsed.homeserver === "string" &&
+      typeof gatewayUrl === "string" &&
       typeof parsed.userId === "string" &&
       typeof parsed.accessToken === "string" &&
       typeof parsed.deviceId === "string"
     ) {
       return {
-        homeserver: parsed.homeserver,
+        gatewayUrl,
         userId: parsed.userId,
         accessToken: parsed.accessToken,
         deviceId: parsed.deviceId,

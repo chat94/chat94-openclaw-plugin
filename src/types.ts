@@ -14,16 +14,14 @@ export type Chat4000AccountConfig = {
   releaseChannel?: string;
   /** Backend environment preset: "prod" | "stage". */
   env?: string;
-  /** Matrix session — normally written by `setup`, overridable by hand/env. */
-  homeserver?: string;
+  /** WS gateway URL — normally written by `setup`, overridable by hand/env. */
+  gatewayUrl?: string;
   userId?: string;
   accessToken?: string;
   deviceId?: string;
   provisioning?: Chat4000ProvisioningConfig;
   dmPolicy?: "open" | "pairing" | "disabled";
   allowFrom?: string[];
-  /** Matrix user ids allowed to trigger plugin.update over the control room. */
-  updateAllowFrom?: string[];
   textChunkLimit?: number;
   blockStreaming?: boolean;
   initialSyncLimit?: number;
@@ -39,12 +37,12 @@ export type Chat4000Config = Chat4000AccountConfig & {
 export type ResolvedChat4000Account = {
   accountId: string;
   enabled: boolean;
-  /** True once Matrix credentials (homeserver/userId/accessToken/deviceId) exist. */
+  /** True once Matrix credentials (gatewayUrl/userId/accessToken/deviceId) exist. */
   configured: boolean;
   pairingLogLevel: "info" | "debug";
   runtimeLogLevel: "info" | "debug";
-  /** Matrix identity, resolved from credentials file → config → env. */
-  homeserver: string;
+  /** WS gateway URL, resolved from credentials file → config → env. */
+  gatewayUrl: string;
   userId: string;
   accessToken: string;
   deviceId: string;

@@ -14,7 +14,7 @@
           "runtimeLogLevel": { "type": "string", "enum": ["info", "debug"] },
           "releaseChannel": { "type": "string" },
           "env": { "type": "string", "enum": ["prod", "stage"] },
-          "homeserver": { "type": "string" },
+          "gatewayUrl": { "type": "string" },
           "userId": { "type": "string" },
           "accessToken": { "type": "string" },
           "deviceId": { "type": "string" },
@@ -29,7 +29,6 @@
           "defaultAccount": { "type": "string" },
           "dmPolicy": { "type": "string", "enum": ["open", "pairing", "disabled"] },
           "allowFrom": { "type": "array", "items": { "type": "string" } },
-          "updateAllowFrom": { "type": "array", "items": { "type": "string" } },
           "textChunkLimit": { "type": "integer" },
           "blockStreaming": { "type": "boolean" },
           "initialSyncLimit": { "type": "integer" },
@@ -44,7 +43,7 @@
                 "runtimeLogLevel": { "type": "string", "enum": ["info", "debug"] },
                 "releaseChannel": { "type": "string" },
                 "env": { "type": "string", "enum": ["prod", "stage"] },
-                "homeserver": { "type": "string" },
+                "gatewayUrl": { "type": "string" },
                 "userId": { "type": "string" },
                 "accessToken": { "type": "string" },
                 "deviceId": { "type": "string" },
@@ -58,7 +57,6 @@
                 },
                 "dmPolicy": { "type": "string", "enum": ["open", "pairing", "disabled"] },
                 "allowFrom": { "type": "array", "items": { "type": "string" } },
-                "updateAllowFrom": { "type": "array", "items": { "type": "string" } },
                 "textChunkLimit": { "type": "integer" },
                 "blockStreaming": { "type": "boolean" },
                 "initialSyncLimit": { "type": "integer" }
@@ -72,7 +70,7 @@
   "channelEnvVars": {
     "chat4000": [
       "CHAT4000_ENV",
-      "CHAT4000_HOMESERVER",
+      "CHAT4000_GATEWAY_URL",
       "CHAT4000_USER_ID",
       "CHAT4000_ACCESS_TOKEN",
       "CHAT4000_DEVICE_ID",

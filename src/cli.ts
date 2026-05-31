@@ -5,10 +5,12 @@ import { dumpChat4000Trace } from "./error-log.js";
 import { deleteMatrixCredentials } from "./matrix/credentials.js";
 import type { MatrixCredentials } from "./matrix/types.js";
 import { configureIdentity, selfRedeemIdentity } from "./pairing/bot-identity.js";
-import { createPairedRoom } from "./matrix/rooms.js";
+import { createPairedRoom, inviteUserToRooms } from "./matrix/rooms.js";
+import { readPluginRooms } from "./matrix/space.js";
 import { endpointsForEnv, resolveEnv, type Chat4000Env } from "./pairing/env.js";
 import { getOrCreatePluginId } from "./pairing/instance.js";
 import { RegistrarClient } from "./pairing/registrar.js";
+import { checkPluginVersion, formatVersionNotice } from "./pairing/version-check.js";
 import { renderQr, startHumanPairing } from "./pairing/qr.js";
 import { resolveChat4000AccountStateDir } from "./paths.js";
 import {
@@ -45,7 +47,7 @@ type SetupCommandOptions = {
   stage?: boolean;
   registrarUrl?: string;
   serviceToken?: string;
-  homeserver?: string;
+  gatewayUrl?: string;
   userId?: string;
   accessToken?: string;
   deviceId?: string;
@@ -71,7 +73,7 @@ type MigrateCommandOptions = {
   stage?: boolean;
   registrarUrl?: string;
   serviceToken?: string;
-  homeserver?: string;
+  gatewayUrl?: string;
 };
 
 type SessionBindingOptions = {
@@ -105,7 +107,7 @@ export function registerChat4000Cli(api: PluginApiLike): void {
         .option("--stage", "Shortcut for --env stage")
         .option("--registrar-url <url>", "Registrar base URL (overrides env preset)")
         .option("--service-token <token>", "Registrar SERVICE_TOKEN")
-        .option("--homeserver <url>", "Matrix homeserver URL (overrides env preset)")
+        .option("--gateway-url <url>", "WS gateway URL (overrides env preset)")
         .option("--user-id <id>", "Matrix bot user id, e.g. @plugin_x:chat4000.com")
         .option("--access-token <token>", "Matrix bot access token")
         .option("--device-id <id>", "Matrix bot device id")
@@ -144,7 +146,7 @@ export function registerChat4000Cli(api: PluginApiLike): void {
           output.write(
             [
               `account: ${account.accountId}`,
-              `homeserver: ${account.homeserver || "(missing)"}`,
+              `gateway: ${account.gatewayUrl || "(missing)"}`,
               `user id: ${account.userId || "(missing)"}`,
               `device id: ${account.deviceId || "(missing)"}`,
               `plugin id: ${account.pluginId ?? "(unset)"}`,
@@ -164,7 +166,7 @@ export function registerChat4000Cli(api: PluginApiLike): void {
         .option("--stage", "Shortcut for --env stage")
         .option("--registrar-url <url>", "Registrar base URL (overrides env preset)")
         .option("--service-token <token>", "Registrar SERVICE_TOKEN")
-        .option("--homeserver <url>", "Matrix homeserver URL (overrides env preset)")
+        .option("--gateway-url <url>", "WS gateway URL (overrides env preset)")
         .action(async (opts: MigrateCommandOptions) => {
           await runMigrate(api, opts).catch(handleCliError);
         });
@@ -295,7 +297,7 @@ type EndpointOpts = {
   stage?: boolean;
   registrarUrl?: string;
   serviceToken?: string;
-  homeserver?: string;
+  gatewayUrl?: string;
 };
 
 function resolveSelectedEnv(opts: EndpointOpts): Chat4000Env {
@@ -319,12 +321,34 @@ function resolveRegistrar(
   return { client: new RegistrarClient({ baseUrl: url, serviceToken }), url };
 }
 
-function resolveHomeserver(
+function resolveGatewayUrl(
   account: ReturnType<typeof resolveChat4000Account>,
   opts: EndpointOpts,
 ): string {
   const env = resolveSelectedEnv(opts);
-  return opts.homeserver?.trim() || account.homeserver || endpointsForEnv(env).homeserver;
+  return opts.gatewayUrl?.trim() || account.gatewayUrl || endpointsForEnv(env).gateway;
+}
+
+/**
+ * PROTOCOL C.5: before a privileged /pair/* call, check the version policy.
+ * `force_upgrade` aborts the command; `recommend_upgrade` warns and continues.
+ * A failed/unreachable check never blocks (fail-open) — it's advisory.
+ */
+async function enforceVersionBeforePrivileged(
+  registrar: RegistrarClient,
+  releaseChannel: string | undefined,
+): Promise<void> {
+  let verdict;
+  try {
+    verdict = await checkPluginVersion({ registrar, releaseChannel });
+  } catch {
+    return; // advisory only — don't block onboarding on a check failure
+  }
+  const notice = formatVersionNotice(verdict);
+  if (verdict.action === "force_upgrade") {
+    throw new Error(notice ?? "this plugin version must be upgraded before pairing");
+  }
+  if (notice) output.write(`⚠ ${notice}\n`);
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -336,10 +360,10 @@ async function runSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<
     accountId: opts.account,
   });
   const env = resolveSelectedEnv(opts);
-  const homeserver = resolveHomeserver(account, opts);
+  const gatewayUrl = resolveGatewayUrl(account, opts);
 
   // Bot identity: either operator-supplied direct credentials, or self-onboard
-  // via a kind=plugin registrar code (PROTOCOL §3).
+  // via a kind=plugin registrar code (PROTOCOL C).
   const directUserId = opts.userId?.trim() || account.userId;
   const directToken = opts.accessToken?.trim() || account.accessToken;
   const directDeviceId = opts.deviceId?.trim() || account.deviceId;
@@ -351,7 +375,7 @@ async function runSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<
     const result = configureIdentity({
       accountId: account.accountId,
       credentials: {
-        homeserver,
+        gatewayUrl,
         userId: directUserId,
         accessToken: directToken,
         deviceId: directDeviceId,
@@ -363,11 +387,12 @@ async function runSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<
     output.write(`✓ Configured Matrix identity: ${credentials.userId}\n`);
   } else if (opts.selfRedeem) {
     const { client } = resolveRegistrar(account, opts);
+    await enforceVersionBeforePrivileged(client, account.config.releaseChannel);
     output.write(`Self-onboarding a Matrix bot identity via the registrar (${env})...\n`);
     const result = await selfRedeemIdentity({
       accountId: account.accountId,
       registrar: client,
-      homeserver,
+      gatewayUrl,
     });
     credentials = result.credentials;
     credentialsPath = result.credentialsPath;
@@ -375,7 +400,7 @@ async function runSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<
   } else {
     throw new Error(
       "Provide either --self-redeem (with --service-token / --env), or direct bot " +
-        "credentials: --user-id --access-token --device-id (and --homeserver or --env). " +
+        "credentials: --user-id --access-token --device-id (and --gateway-url or --env). " +
         "Env vars CHAT4000_USER_ID / CHAT4000_ACCESS_TOKEN / CHAT4000_DEVICE_ID also work.",
     );
   }
@@ -386,7 +411,7 @@ async function runSetup(api: PluginApiLike, opts: SetupCommandOptions): Promise<
     env,
     pairingLogLevel: normalizeLogLevel(opts.pairingLogLevel ?? account.pairingLogLevel),
     runtimeLogLevel: normalizeLogLevel(opts.runtimeLogLevel ?? account.runtimeLogLevel),
-    homeserver: credentials.homeserver,
+    gatewayUrl: credentials.gatewayUrl,
     userId: credentials.userId,
     deviceId: credentials.deviceId,
     registrarUrl: opts.registrarUrl?.trim() || account.provisioning.url || endpointsForEnv(env).registrar,
@@ -410,6 +435,7 @@ async function runPair(api: PluginApiLike, opts: PairCommandOptions): Promise<vo
     throw new Error('No Matrix identity yet. Run "openclaw chat4000 setup" first.');
   }
   const { client, url } = resolveRegistrar(account, opts);
+  await enforceVersionBeforePrivileged(client, account.config.releaseChannel);
   const pluginId = account.pluginId ?? getOrCreatePluginId(account.accountId);
   const ttlSeconds = Math.max(1, Math.min(3600, Number.parseInt(opts.ttl ?? "300", 10) || 300));
 
@@ -431,24 +457,38 @@ async function runPair(api: PluginApiLike, opts: PairCommandOptions): Promise<vo
       const status = await client.getPairingStatus(pairing.code);
       if (status.status === "completed") {
         output.write(`✓ Device paired${status.userId ? ` (${status.userId})` : ""}.\n`);
-        // PROTOCOL §3.3: on completion the plugin invites the user to a room.
+        // PROTOCOL C.3 + E: on completion the plugin invites the user into its
+        // control room + space (created by the gateway). If the gateway hasn't
+        // created them yet, fall back to a DM so messages can still flow.
         if (status.userId) {
+          const credentials = {
+            gatewayUrl: account.gatewayUrl,
+            userId: account.userId,
+            accessToken: account.accessToken,
+            deviceId: account.deviceId,
+            pluginId: account.pluginId,
+          };
+          const rooms = readPluginRooms(account.accountId);
           try {
-            const room = await createPairedRoom({
-              credentials: {
-                homeserver: account.homeserver,
-                userId: account.userId,
-                accessToken: account.accessToken,
-                deviceId: account.deviceId,
-                pluginId: account.pluginId,
-              },
-              inviteUserId: status.userId,
-              name: "chat4000",
-            });
-            output.write(`✓ Created room ${room.roomId} and invited ${status.userId}.\n`);
+            if (rooms.spaceId && rooms.controlRoomId) {
+              await inviteUserToRooms({
+                credentials,
+                roomIds: [rooms.controlRoomId, rooms.spaceId],
+                userId: status.userId,
+              });
+              output.write(`✓ Invited ${status.userId} to the control room + space.\n`);
+            } else {
+              const room = await createPairedRoom({
+                credentials,
+                inviteUserId: status.userId,
+                name: "chat4000",
+              });
+              output.write(`✓ Created room ${room.roomId} and invited ${status.userId}.\n`);
+              output.write("  Start the gateway to create the plugin's control room + space.\n");
+            }
           } catch (err) {
-            output.write(`⚠ Paired, but creating/inviting the room failed: ${String(err)}\n`);
-            output.write("  The gateway will still see the user once they share a room.\n");
+            output.write(`⚠ Paired, but inviting the user failed: ${String(err)}\n`);
+            output.write("  The gateway will reconcile once it's running.\n");
           }
         }
         return;
@@ -473,12 +513,12 @@ async function runMigrate(api: PluginApiLike, opts: MigrateCommandOptions): Prom
   const env = resolveSelectedEnv(opts);
   const registrarUrl =
     opts.registrarUrl?.trim() || account.provisioning.url || endpointsForEnv(env).registrar;
-  const homeserver = resolveHomeserver(account, opts);
+  const gatewayUrl = resolveGatewayUrl(account, opts);
   // Prefer credentials already resolvable (env/config/file); else self-onboard
   // via the registrar if a SERVICE_TOKEN is available.
   const existingCredentials: MatrixCredentials | null = account.configured
     ? {
-        homeserver: account.homeserver,
+        gatewayUrl: account.gatewayUrl,
         userId: account.userId,
         accessToken: account.accessToken,
         deviceId: account.deviceId,
@@ -493,7 +533,7 @@ async function runMigrate(api: PluginApiLike, opts: MigrateCommandOptions): Prom
     accountId: account.accountId,
     existingCredentials,
     registrar,
-    homeserver,
+    gatewayUrl,
     write: (line) => output.write(`${line}\n`),
     persistConfig: async (creds) => {
       await writeChannelConfig(api, {
@@ -501,7 +541,7 @@ async function runMigrate(api: PluginApiLike, opts: MigrateCommandOptions): Prom
         env,
         pairingLogLevel: account.pairingLogLevel,
         runtimeLogLevel: account.runtimeLogLevel,
-        homeserver: creds.homeserver,
+        gatewayUrl: creds.gatewayUrl,
         userId: creds.userId,
         deviceId: creds.deviceId,
         registrarUrl,
@@ -681,7 +721,7 @@ type ChannelConfigParams = {
   env: Chat4000Env;
   pairingLogLevel: "info" | "debug";
   runtimeLogLevel: "info" | "debug";
-  homeserver: string;
+  gatewayUrl: string;
   userId: string;
   deviceId: string;
   registrarUrl?: string;
@@ -712,7 +752,7 @@ export function patchChannelConfig(
     env: params.env,
     pairingLogLevel: params.pairingLogLevel,
     runtimeLogLevel: params.runtimeLogLevel,
-    homeserver: params.homeserver,
+    gatewayUrl: params.gatewayUrl,
     userId: params.userId,
     deviceId: params.deviceId,
   };

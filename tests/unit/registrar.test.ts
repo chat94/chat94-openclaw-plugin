@@ -93,9 +93,56 @@ describe("RegistrarClient", () => {
     expect((err as RegistrarError).errcode).toBe("M_IN_USE");
   });
 
-  it("generatePairingCode returns a code within the §3.1 6–128 char bound", () => {
-    const code = generatePairingCode();
-    expect(code.length).toBeGreaterThanOrEqual(6);
-    expect(code.length).toBeLessThanOrEqual(128);
+  it("generatePairingCode returns exactly 6 digits (PROTOCOL C.1/C.2)", () => {
+    for (let i = 0; i < 200; i += 1) {
+      const code = generatePairingCode();
+      expect(code).toMatch(/^[0-9]{6}$/);
+    }
+  });
+
+  it("checkVersion POSTs /version (public) with app_id and maps the verdict (PROTOCOL C.5)", async () => {
+    let captured: { url: string; init: RequestInit } | undefined;
+    const client = new RegistrarClient({
+      baseUrl: "https://registrar.chat4000.com",
+      serviceToken: "svc-token",
+      fetchImpl: mockFetch((url, init) => {
+        captured = { url, init };
+        return {
+          status: 200,
+          body: {
+            action: "force_upgrade",
+            min_version: "2.0.0",
+            min_nag: null,
+            recommended: "2.1.0",
+            current_terms_version: 3,
+            message: "please upgrade",
+          },
+        };
+      }),
+    });
+
+    const res = await client.checkVersion({
+      appId: "@chat4000/openclaw-plugin",
+      clientVersion: "1.9.0",
+      releaseChannel: "stage",
+      platform: "macos",
+    });
+
+    expect(captured?.url).toBe("https://registrar.chat4000.com/version");
+    // Public endpoint — no bearer token.
+    expect((captured?.init.headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(JSON.parse(String(captured?.init.body))).toMatchObject({
+      app_id: "@chat4000/openclaw-plugin",
+      client_version: "1.9.0",
+      release_channel: "stage",
+    });
+    expect(res).toEqual({
+      action: "force_upgrade",
+      minVersion: "2.0.0",
+      minNag: null,
+      recommended: "2.1.0",
+      currentTermsVersion: 3,
+      message: "please upgrade",
+    });
   });
 });

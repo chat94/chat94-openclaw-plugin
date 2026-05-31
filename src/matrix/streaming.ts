@@ -10,7 +10,7 @@
  * Edits are throttled so we don't hammer the homeserver with one edit/token.
  */
 import type { MatrixClient } from "matrix-js-sdk";
-import { editText, sendText } from "./send.js";
+import { editText, sendText, sendTurnAnchor } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 750;
 
@@ -49,6 +49,24 @@ export class MatrixDraftStream {
     this.log = opts.log;
   }
 
+  /** The turn anchor event id, once the message exists. */
+  get anchorEventId(): string | undefined {
+    return this.eventId;
+  }
+
+  /**
+   * Eagerly create the turn anchor (the answer message) so turn events — tool
+   * calls — can relate to it before any text streams (PROTOCOL E). Idempotent.
+   */
+  async ensureAnchor(): Promise<string> {
+    if (this.disposed && this.eventId) return this.eventId;
+    if (!this.eventId) {
+      this.eventId = await sendTurnAnchor(this.client, this.roomId);
+      this.lastSentText = "…";
+    }
+    return this.eventId;
+  }
+
   /** Accumulate streamed text; schedules a throttled edit. */
   update(text: string): void {
     if (this.disposed || !text) return;
@@ -60,13 +78,13 @@ export class MatrixDraftStream {
     }, this.throttleMs);
   }
 
-  /** Flush the final text immediately (no throttle). */
+  /** Flush the final text immediately (no throttle). Marks it push-eligible. */
   async finalize(text: string): Promise<string | undefined> {
     if (this.disposed) return this.eventId;
     this.clearTimer();
     const finalText = (text || this.pendingText || this.lastSentText).trimEnd();
     this.pendingText = finalText;
-    await this.flushPending();
+    await this.flushPending(true);
     return this.eventId;
   }
 
@@ -92,20 +110,26 @@ export class MatrixDraftStream {
     }
   }
 
-  private flushPending(): Promise<void> {
+  private flushPending(final = false): Promise<void> {
     // Serialize sends so create-then-edit ordering is preserved.
-    this.inFlight = this.inFlight.then(() => this.sendOrEdit());
+    this.inFlight = this.inFlight.then(() => this.sendOrEdit(final));
     return this.inFlight;
   }
 
-  private async sendOrEdit(): Promise<void> {
+  /**
+   * `final` carries the `chat4000.push` eligibility (PROTOCOL E): every streaming
+   * write is `push:false`; only `finalize()` passes `true`. This holds for the
+   * one-shot case too — if the very first write is the final one, the created
+   * message is itself push-eligible.
+   */
+  private async sendOrEdit(final: boolean): Promise<void> {
     const text = this.pendingText.trimEnd();
     if (!text || text === this.lastSentText) return;
     try {
       if (!this.eventId) {
-        this.eventId = await sendText(this.client, this.roomId, text);
+        this.eventId = await sendText(this.client, this.roomId, text, final);
       } else {
-        await editText(this.client, this.roomId, this.eventId, text);
+        await editText(this.client, this.roomId, this.eventId, text, final);
       }
       this.lastSentText = text;
     } catch (err) {

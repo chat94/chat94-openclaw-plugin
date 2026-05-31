@@ -11,6 +11,7 @@
  */
 import MarkdownIt from "markdown-it";
 import { EventType, type MatrixClient, MsgType, RelationType } from "matrix-js-sdk";
+import { markPush } from "./push-registry.js";
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 
@@ -32,16 +33,26 @@ function renderTextContent(text: string): MatrixContent {
   };
 }
 
-/** Send a brand-new text message. Returns the event id. */
+/**
+ * Send a brand-new text message. Returns the event id.
+ *
+ * `push` is the `chat4000.push` eligibility (PROTOCOL E): `true` for a completed,
+ * user-meaningful result; `false` for a non-final message (the gateway transport
+ * injects this cleartext flag into the wire event, keyed by `txnId`).
+ */
 export async function sendText(
   client: MatrixClient,
   roomId: string,
   text: string,
+  push = true,
 ): Promise<string> {
+  const txnId = client.makeTxnId();
+  markPush(txnId, push);
   const res = await client.sendEvent(
     roomId,
     EventType.RoomMessage,
     renderTextContent(text) as SendContent,
+    txnId,
   );
   return res.event_id;
 }
@@ -49,13 +60,15 @@ export async function sendText(
 /**
  * Edit an existing message in place (`m.replace`). Returns the edit event id.
  * This is the streaming primitive: the draft stream calls this repeatedly with
- * the accumulated text; the final call carries the full reply.
+ * the accumulated text; the final call carries the full reply. Live edits are
+ * `push:false`; only the final edit is `push:true` (PROTOCOL E).
  */
 export async function editText(
   client: MatrixClient,
   roomId: string,
   targetEventId: string,
   text: string,
+  push = false,
 ): Promise<string> {
   const newContent = renderTextContent(text);
   const content: MatrixContent = {
@@ -68,7 +81,9 @@ export async function editText(
       event_id: targetEventId,
     },
   };
-  const res = await client.sendEvent(roomId, EventType.RoomMessage, content as SendContent);
+  const txnId = client.makeTxnId();
+  markPush(txnId, push);
+  const res = await client.sendEvent(roomId, EventType.RoomMessage, content as SendContent, txnId);
   return res.event_id;
 }
 
@@ -89,8 +104,91 @@ export async function sendCommandResult(
     ...(result.error ? { error: result.error } : {}),
     ...(result.data ?? {}),
   };
-  const res = await client.sendEvent(roomId, EventType.RoomMessage, content as SendContent);
+  // A command result answers a device action — never wake the user for it.
+  const txnId = client.makeTxnId();
+  markPush(txnId, false);
+  const res = await client.sendEvent(roomId, EventType.RoomMessage, content as SendContent, txnId);
   return res.event_id;
+}
+
+// ── Turn anchoring, tool calls, agent status (PROTOCOL E) ────────────────────
+
+/** chat4000 relation type tying turn events to their anchor message. */
+const TURN_REL_TYPE = "chat4000.turn";
+const TOOL_MSGTYPE = "chat4000.tool";
+
+export type ToolPayload = {
+  tool_id: string;
+  name: string;
+  icon?: string;
+  args: string;
+  status: "running" | "done" | "failed";
+  result: string;
+  duration_ms: number;
+};
+
+/**
+ * Post the turn anchor — the answer message a turn streams into. Starts as a
+ * thin placeholder (`chat4000.push:false`); the draft stream edits it to the
+ * full answer and the final edit flips push to true (PROTOCOL E).
+ */
+export async function sendTurnAnchor(client: MatrixClient, roomId: string): Promise<string> {
+  return sendText(client, roomId, "…", false);
+}
+
+/** Send a tool-start event related to the turn anchor (PROTOCOL E). push:false. */
+export async function sendToolStart(
+  client: MatrixClient,
+  roomId: string,
+  turnId: string,
+  tool: ToolPayload,
+): Promise<string> {
+  const content: MatrixContent = {
+    msgtype: TOOL_MSGTYPE,
+    body: `[tool ${tool.name}: ${tool.status}]`,
+    [TOOL_MSGTYPE]: tool,
+    "m.relates_to": { rel_type: TURN_REL_TYPE, event_id: turnId },
+  };
+  const txnId = client.makeTxnId();
+  markPush(txnId, false);
+  const res = await client.sendEvent(roomId, EventType.RoomMessage, content as SendContent, txnId);
+  return res.event_id;
+}
+
+/** Edit a tool event to its terminal state (`m.replace`). push:false. */
+export async function editToolEnd(
+  client: MatrixClient,
+  roomId: string,
+  toolEventId: string,
+  tool: ToolPayload,
+): Promise<void> {
+  const newContent: MatrixContent = {
+    msgtype: TOOL_MSGTYPE,
+    body: `[tool ${tool.name}: ${tool.status}]`,
+    [TOOL_MSGTYPE]: tool,
+  };
+  const content: MatrixContent = {
+    ...newContent,
+    "m.new_content": newContent,
+    "m.relates_to": { rel_type: RelationType.Replace, event_id: toolEventId },
+  };
+  const txnId = client.makeTxnId();
+  markPush(txnId, false);
+  await client.sendEvent(roomId, EventType.RoomMessage, content as SendContent, txnId);
+}
+
+/**
+ * Publish the coarse agent activity label as a cleartext state event
+ * (PROTOCOL E). State events are not E2EE in Matrix — this carries only an
+ * activity word, no message content. Overwrites on each transition.
+ */
+export async function sendAgentStatus(
+  client: MatrixClient,
+  roomId: string,
+  state: "thinking" | "working" | "typing" | "idle",
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (client.sendStateEvent as any)(roomId, "chat4000.status", { state }, "");
 }
 
 /** Send a typing indicator (ephemeral, best-effort). */

@@ -63,34 +63,35 @@ export function resolveChat4000Account(params: {
   const accountOverrides = channelConfig.accounts?.[accountId] ?? {};
   const merged: Chat4000Config = { ...channelConfig, ...accountOverrides };
 
-  const envHomeserver = trimmed(process.env.CHAT4000_HOMESERVER);
+  const envGatewayUrl =
+    trimmed(process.env.CHAT4000_GATEWAY_URL) || trimmed(process.env.CHAT4000_HOMESERVER);
   const envUserId = trimmed(process.env.CHAT4000_USER_ID);
   const envAccessToken = trimmed(process.env.CHAT4000_ACCESS_TOKEN);
   const envDeviceId = trimmed(process.env.CHAT4000_DEVICE_ID);
 
   const stored = loadMatrixCredentials(accountId);
 
-  let homeserver = "";
+  let gatewayUrl = "";
   let userId = "";
   let accessToken = "";
   let deviceId = "";
   let pluginId: string | undefined;
   let credentialSource: ResolvedChat4000Account["credentialSource"] = "missing";
 
-  if (envHomeserver && envUserId && envAccessToken) {
-    homeserver = envHomeserver;
+  if (envGatewayUrl && envUserId && envAccessToken) {
+    gatewayUrl = envGatewayUrl;
     userId = envUserId;
     accessToken = envAccessToken;
     deviceId = envDeviceId;
     credentialSource = "env";
-  } else if (trimmed(merged.homeserver) && trimmed(merged.userId) && trimmed(merged.accessToken)) {
-    homeserver = trimmed(merged.homeserver);
+  } else if (trimmed(merged.gatewayUrl) && trimmed(merged.userId) && trimmed(merged.accessToken)) {
+    gatewayUrl = trimmed(merged.gatewayUrl);
     userId = trimmed(merged.userId);
     accessToken = trimmed(merged.accessToken);
     deviceId = trimmed(merged.deviceId);
     credentialSource = "config";
   } else if (stored) {
-    homeserver = stored.homeserver;
+    gatewayUrl = stored.gatewayUrl;
     userId = stored.userId;
     accessToken = stored.accessToken;
     deviceId = stored.deviceId;
@@ -98,7 +99,7 @@ export function resolveChat4000Account(params: {
     credentialSource = "state-file";
   }
 
-  const configured = Boolean(homeserver && userId && accessToken && deviceId);
+  const configured = Boolean(gatewayUrl && userId && accessToken && deviceId);
 
   return {
     accountId,
@@ -106,7 +107,7 @@ export function resolveChat4000Account(params: {
     configured,
     pairingLogLevel: merged.pairingLogLevel === "debug" ? "debug" : "info",
     runtimeLogLevel: merged.runtimeLogLevel === "debug" ? "debug" : "info",
-    homeserver,
+    gatewayUrl,
     userId,
     accessToken,
     deviceId,
@@ -122,8 +123,8 @@ export function resolveChat4000Account(params: {
  * wizard to detect a hands-off configuration).
  */
 export function hasConfiguredState(env?: Record<string, string>): boolean {
-  const hs = env?.CHAT4000_HOMESERVER?.trim();
+  const gw = (env?.CHAT4000_GATEWAY_URL ?? env?.CHAT4000_HOMESERVER)?.trim();
   const uid = env?.CHAT4000_USER_ID?.trim();
   const token = env?.CHAT4000_ACCESS_TOKEN?.trim();
-  return Boolean(hs && uid && token);
+  return Boolean(gw && uid && token);
 }

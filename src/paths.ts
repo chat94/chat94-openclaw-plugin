@@ -71,6 +71,14 @@ export function resolveChat4000InstancePath(accountId: string): string {
   return path.join(resolveChat4000PluginDir(), "instance", `${normalizeAccountId(accountId)}.json`);
 }
 
+/**
+ * `~/.openclaw/plugins/chat4000/update-marker.json` — plugin-global self-update
+ * boot marker used to auto-roll-back a version that fails to come up healthy.
+ */
+export function resolveChat4000UpdateMarkerPath(): string {
+  return path.join(resolveChat4000PluginDir(), "update-marker.json");
+}
+
 /** Ensure a directory exists, returning it. */
 export function ensureDir(dir: string): string {
   if (!existsSync(dir)) {
