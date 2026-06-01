@@ -11,7 +11,6 @@ import { SENTRY_DSN } from "./telemetry-dsn.generated.js";
 const PACKAGE_VERSION = readPackageVersion();
 const CONFIG_DIR = path.join(os.homedir(), ".config", "chat4000");
 const INSTALL_ID_PATH = path.join(CONFIG_DIR, "install-id");
-const NOTICE_SHOWN_PATH = path.join(CONFIG_DIR, "notice-shown");
 const TELEMETRY_ENABLED_PATH = path.join(CONFIG_DIR, "telemetry-enabled");
 
 let sentryClient: typeof import("@sentry/node") | undefined;
@@ -32,8 +31,6 @@ export function initializeChat4000Telemetry(): void {
 
   const status = getTelemetryStatus();
   if (!status.enabled) return;
-
-  maybePrintFirstRunNotice();
 
   if (!SENTRY_DSN) return;
 
@@ -193,28 +190,3 @@ function resolveInstallId(): string {
   }
 }
 
-function maybePrintFirstRunNotice(): void {
-  try {
-    if (existsSync(NOTICE_SHOWN_PATH)) return;
-    process.stderr.write(
-      [
-        `chat4000-plugin v${PACKAGE_VERSION}`,
-        "",
-        "Anonymous error reports help us fix bugs faster. We collect crash data",
-        "and error traces -- never message content, prompts, command arguments,",
-        "or environment variables.",
-        "",
-        "To opt out:",
-        "  openclaw chat4000 telemetry disable",
-        "  or set CHAT4000_TELEMETRY_DISABLED=1",
-        "",
-        "Privacy policy: https://chat4000.com/privacy",
-        "",
-      ].join("\n"),
-    );
-    mkdirSync(CONFIG_DIR, { recursive: true });
-    writeFileSync(NOTICE_SHOWN_PATH, "", { mode: 0o600 });
-  } catch {
-    // Notice persistence is best-effort only.
-  }
-}
