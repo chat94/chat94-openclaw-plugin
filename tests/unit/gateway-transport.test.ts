@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { GatewayTransport, gatewayToBaseUrl } from "../../src/matrix/gateway-transport.js";
 import { _resetPushRegistry, markPush } from "../../src/matrix/push-registry.js";
 
@@ -93,6 +96,8 @@ describe("GatewayTransport", () => {
   it("starts sync via sync_start and resolves slidingSyncRequest from a sync frame", async () => {
     const { transport, ws } = await connected();
     const syncP = transport.slidingSyncRequest({ lists: { all: { ranges: [[0, 10]] } } });
+    // slidingSyncRequest awaits the prior-batch ack before sending sync_start.
+    await new Promise((r) => setTimeout(r, 0));
     const start = ws.frames().find((f) => f.t === "sync_start");
     expect(start).toBeTruthy();
 
@@ -131,6 +136,77 @@ describe("GatewayTransport", () => {
     } finally {
       (globalThis as { fetch: unknown }).fetch = realFetch;
     }
+  });
+
+  it("flushes crypto + sync_acks a batch that carried to-device keys (PROTOCOL D.2)", async () => {
+    (globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;
+    const flush = vi.fn(async () => undefined);
+    const dir = mkdtempSync(path.join(os.tmpdir(), "c4k-pos-"));
+    const posFile = path.join(dir, "pos.txt");
+    try {
+      const transport = new GatewayTransport({
+        gatewayUrl: "wss://gateway.chat4000.com/ws",
+        accessToken: "syt",
+        flushBeforeAck: flush,
+        posFilePath: posFile,
+      });
+      const connectP = transport.connect();
+      const ws = FakeWebSocket.instances[0];
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({ t: "auth_ok", user_id: "@p:hs", device_id: "D" }) });
+      await connectP;
+
+      const p1 = transport.slidingSyncRequest({ lists: {} });
+      ws.emit("message", {
+        data: JSON.stringify({
+          t: "sync",
+          pos: "p1",
+          lists: {},
+          rooms: {},
+          extensions: { to_device: { events: [{ type: "m.room.encrypted" }] } },
+        }),
+      });
+      await p1;
+
+      // The SDK asking again means it processed p1 → flush + ack p1.
+      void transport.slidingSyncRequest({ lists: {} }).catch(() => undefined);
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(flush).toHaveBeenCalledTimes(1);
+      const ack = ws.frames().find((f) => f.t === "sync_ack");
+      expect(ack?.pos).toBe("p1");
+      expect(readFileSync(posFile, "utf8")).toBe("p1");
+      transport.dispose();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sync_acks a keyless batch WITHOUT flushing crypto (PROTOCOL D.2)", async () => {
+    (globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;
+    const flush = vi.fn(async () => undefined);
+    const transport = new GatewayTransport({
+      gatewayUrl: "wss://gateway.chat4000.com/ws",
+      accessToken: "syt",
+      flushBeforeAck: flush,
+    });
+    const connectP = transport.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.emit("open", {});
+    ws.emit("message", { data: JSON.stringify({ t: "auth_ok", user_id: "@p:hs", device_id: "D" }) });
+    await connectP;
+
+    const p1 = transport.slidingSyncRequest({ lists: {} });
+    ws.emit("message", {
+      data: JSON.stringify({ t: "sync", pos: "p2", lists: {}, rooms: {}, extensions: {} }),
+    });
+    await p1;
+    void transport.slidingSyncRequest({ lists: {} }).catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(flush).not.toHaveBeenCalled();
+    expect(ws.frames().find((f) => f.t === "sync_ack")?.pos).toBe("p2");
+    transport.dispose();
   });
 
   it("injects chat4000.push into an encrypted send keyed by txnId (PROTOCOL E)", async () => {

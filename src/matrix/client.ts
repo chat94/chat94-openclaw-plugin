@@ -143,6 +143,16 @@ export class MatrixClientHandle {
         platform: pluginPlatform(),
         releaseChannel: opts.releaseChannel?.trim() || "dev",
       },
+      // PROTOCOL D.2: durably persist the sync cursor and flush the crypto store
+      // before acking a batch that carried room keys, so the gateway never lets
+      // the homeserver delete to-device keys we haven't saved.
+      posFilePath: path.join(stateDir, "sync-pos.txt"),
+      flushBeforeAck: () =>
+        persistIdbToDisk({
+          snapshotPath: cryptoSnapshotPath,
+          databasePrefix: cryptoDatabasePrefix,
+          log: (l) => opts.log?.debug?.(l),
+        }),
       log: opts.log,
     });
     await transport.connect();

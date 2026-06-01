@@ -18,6 +18,8 @@
  * Reconnect/backoff, re-auth, and request/sync correlation live here. No Matrix
  * semantics and no encryption — those stay in the SDK.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import type {
   MSC3575SlidingSyncRequest,
   MSC3575SlidingSyncResponse,
@@ -46,6 +48,17 @@ export type GatewayTransportOptions = {
   accessToken: string;
   /** Identity reported on the first auth frame (drives the gateway version gate). */
   clientIdentity?: GatewayClientIdentity;
+  /**
+   * File where the last durably-acked sync `pos` is persisted (PROTOCOL D.2).
+   * Loaded on construction → resent in `sync_start`; rewritten before each ack.
+   */
+  posFilePath?: string;
+  /**
+   * Flush the crypto store to durable storage. Called BEFORE `sync_ack` for any
+   * batch that carried to-device keys, so the gateway only deletes server-side
+   * room keys we have already saved (PROTOCOL D.2).
+   */
+  flushBeforeAck?: () => Promise<void>;
   log?: Logger;
   /** Per-`req` response timeout. */
   requestTimeoutMs?: number;
@@ -100,6 +113,10 @@ export class GatewayTransport {
 
   private readonly clientIdentity?: GatewayClientIdentity;
 
+  private readonly posFilePath?: string;
+
+  private readonly flushBeforeAck?: () => Promise<void>;
+
   private readonly log?: Logger;
 
   private readonly requestTimeoutMs: number;
@@ -131,7 +148,14 @@ export class GatewayTransport {
 
   private syncStarted = false;
 
+  /** Latest pos seen on any frame (for the empty-delta fallback). */
   private lastPos: string | undefined;
+
+  /** Last pos we durably persisted + acked — the resume point sent in sync_start. */
+  private ackedPos: string | undefined;
+
+  /** The last frame DELIVERED to the SDK, awaiting ack on its next sync request. */
+  private pendingAck: { pos: string; hadKeys: boolean } | undefined;
 
   /** Resolver for the in-progress (re)connect's auth handshake. */
   private authSettle: { resolve: () => void; reject: (e: Error) => void } | undefined;
@@ -140,10 +164,13 @@ export class GatewayTransport {
     this.gatewayUrl = opts.gatewayUrl;
     this.accessToken = opts.accessToken;
     this.clientIdentity = opts.clientIdentity;
+    this.posFilePath = opts.posFilePath;
+    this.flushBeforeAck = opts.flushBeforeAck;
     this.log = opts.log;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
     this.syncTimeoutMs = opts.syncTimeoutMs ?? 30_000;
     this.maxBackoffMs = opts.maxBackoffMs ?? 30_000;
+    this.ackedPos = this.loadPersistedPos();
   }
 
   /** Open the socket and resolve once the gateway accepts our `auth` frame. */
@@ -179,11 +206,17 @@ export class GatewayTransport {
    * sync loop with this body, then resolve with the next pushed `sync` frame —
    * or, after `timeout`, an empty delta so the SDK's loop stays healthy.
    */
-  slidingSyncRequest = (
+  slidingSyncRequest = async (
     req: MSC3575SlidingSyncRequest,
     _proxyBaseUrl?: string,
     abortSignal?: AbortSignal,
   ): Promise<MSC3575SlidingSyncResponse> => {
+    // The SDK calling us again means it finished processing the frame we last
+    // returned — its to-device room keys are now in the (in-memory) crypto store.
+    // Persist them + the pos, THEN ack so the gateway may advance/delete upstream
+    // (PROTOCOL D.2). Done before serving the next request, never concurrently.
+    await this.flushAndAckPending();
+
     const syncBody = {
       lists: req.lists,
       room_subscriptions: req.room_subscriptions,
@@ -320,6 +353,7 @@ export class GatewayTransport {
     const waiter = this.syncWaiters.shift();
     if (waiter) {
       clearTimeout(waiter.timer);
+      this.markPending(resp); // delivered to the SDK now → ack on its next request
       waiter.resolve(resp);
       return;
     }
@@ -335,7 +369,10 @@ export class GatewayTransport {
     abortSignal?: AbortSignal,
   ): Promise<MSC3575SlidingSyncResponse> {
     const buffered = this.syncQueue.shift();
-    if (buffered) return Promise.resolve(buffered);
+    if (buffered) {
+      this.markPending(buffered); // delivering a real frame → ack it next request
+      return Promise.resolve(buffered);
+    }
     return new Promise<MSC3575SlidingSyncResponse>((resolve, reject) => {
       const waiter: SyncWaiter = {
         resolve,
@@ -403,8 +440,55 @@ export class GatewayTransport {
 
   private sendSyncStart(body: unknown): void {
     const frame: Record<string, unknown> = { t: "sync_start", body };
-    if (this.lastPos) frame.pos = this.lastPos;
+    // Resume from the last DURABLY-acked pos (not lastPos, which may include an
+    // un-persisted batch) so the homeserver re-delivers any keys we hadn't saved.
+    if (this.ackedPos) frame.pos = this.ackedPos;
     this.safeSend(frame);
+  }
+
+  /** Record the frame just handed to the SDK; it gets acked on the next request. */
+  private markPending(resp: MSC3575SlidingSyncResponse): void {
+    if (typeof resp.pos === "string") {
+      this.pendingAck = { pos: resp.pos, hadKeys: respHasToDevice(resp) };
+    }
+  }
+
+  /**
+   * Flush crypto (if the pending batch carried keys) and `sync_ack` it (D.2).
+   * Restores the pending state on failure so the next request retries.
+   */
+  private async flushAndAckPending(): Promise<void> {
+    const pending = this.pendingAck;
+    if (!pending || !this.connected) return;
+    this.pendingAck = undefined;
+    try {
+      if (pending.hadKeys && this.flushBeforeAck) await this.flushBeforeAck();
+      this.persistAckedPos(pending.pos);
+      this.safeSend({ t: "sync_ack", pos: pending.pos });
+    } catch (err) {
+      this.pendingAck = pending; // not persisted → retry on the next request
+      this.log?.warn?.(`sync_ack flush failed (will retry): ${String(err)}`);
+    }
+  }
+
+  private loadPersistedPos(): string | undefined {
+    if (!this.posFilePath || !existsSync(this.posFilePath)) return undefined;
+    try {
+      return readFileSync(this.posFilePath, "utf8").trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private persistAckedPos(pos: string): void {
+    this.ackedPos = pos;
+    if (!this.posFilePath) return;
+    try {
+      mkdirSync(path.dirname(this.posFilePath), { recursive: true });
+      writeFileSync(this.posFilePath, pos, "utf8");
+    } catch (err) {
+      this.log?.warn?.(`sync pos persist failed: ${String(err)}`);
+    }
   }
 
   private safeSend(frame: Record<string, unknown>): void {
@@ -435,6 +519,9 @@ export class GatewayTransport {
   }
 
   private failInFlight(err: Error): void {
+    // A dropped socket invalidates any un-acked batch — we resume from ackedPos
+    // and the homeserver re-delivers it, so don't ack a stale pos after reconnect.
+    this.pendingAck = undefined;
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       p.reject(err);
@@ -454,6 +541,18 @@ export class GatewayTransport {
 /** Media passthrough paths (PROTOCOL D.3) — these go over HTTP, not the WS. */
 function isMediaPath(path: string): boolean {
   return path.startsWith("/_matrix/media/") || path.startsWith("/_matrix/client/v1/media/");
+}
+
+/**
+ * Did this sync delta carry to-device messages (Olm-wrapped Megolm room keys)?
+ * Only then must we flush the crypto store to disk before acking (PROTOCOL D.2) —
+ * most deltas carry none, so we avoid a disk dump on every batch.
+ */
+function respHasToDevice(resp: MSC3575SlidingSyncResponse): boolean {
+  const ext = (resp as { extensions?: Record<string, unknown> }).extensions;
+  if (!ext) return false;
+  const td = (ext.to_device ?? ext["m.to_device"]) as { events?: unknown[] } | undefined;
+  return Array.isArray(td?.events) && td.events.length > 0;
 }
 
 const SEND_EVENT_PATH = /\/rooms\/[^/]+\/send\/(m\.room\.encrypted|m\.room\.message)\/([^/?]+)/;
