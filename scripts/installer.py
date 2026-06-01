@@ -454,14 +454,48 @@ def detect_restart_method() -> Optional[str]:
 
 # ─── Install steps ────────────────────────────────────────────────────────
 
-def install_plugin(openclaw: str, force: bool) -> tuple:
+def detect_plugin_state(openclaw: str) -> tuple:
+    """Is the chat4000 plugin already installed, and at which version?
+
+    Reuses the plugin's own read-only preflight: `openclaw chat4000 update
+    --check --json` only exists once the plugin is installed, and reports its
+    `currentVersion` + `latestVersion` + `newerAvailable`. Returns
+    (installed: bool, current: Optional[str], latest: Optional[str], newer: bool).
+    Best-effort — any failure (command not found, offline, bad JSON) ⇒ treat as
+    not installed and fall back to a plain install.
+    """
+    try:
+        r = subprocess.run(
+            [openclaw, "chat4000", "update", "--check", "--json"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return (False, None, None, False)
+    if r.returncode != 0 or not (r.stdout or "").strip():
+        return (False, None, None, False)
+    try:
+        text = r.stdout
+        start = text.find("{")  # tolerate any leading log lines
+        data = json.loads(text[start:]) if start >= 0 else {}
+    except Exception:
+        return (False, None, None, False)
+    cur = data.get("currentVersion")
+    latest = data.get("latestVersion")
+    newer = bool(data.get("newerAvailable"))
+    return (bool(cur), cur, latest, newer)
+
+def install_plugin(openclaw: str, force: bool, spec: Optional[str] = None) -> tuple:
     """Try `openclaw plugins install` (plural, current) first; fall back
-    to `openclaw plugin install` (singular, older). Returns
+    to `openclaw plugin install` (singular, older). With no `spec`, npm resolves
+    the latest published version; pass a `spec` (a version like `1.1.0-rc.1` or a
+    dist-tag like `next`) to install `<pkg>@<spec>` instead. `force` reinstalls in
+    place (used to upgrade/replace an existing install). Returns
     (success, output_tail). output_tail is empty on success and the last
     ~512 chars of combined stdout/stderr on failure."""
+    target = f"{NPM_PACKAGE}@{spec}" if spec else NPM_PACKAGE
     base_cmds = [
-        [openclaw, "plugins", "install", NPM_PACKAGE],   # canonical (2026.4+)
-        [openclaw, "plugin", "install", NPM_PACKAGE],    # legacy
+        [openclaw, "plugins", "install", target],   # canonical (2026.4+)
+        [openclaw, "plugin", "install", target],    # legacy
     ]
     last_tail = ""
     for cmd in base_cmds:
@@ -609,8 +643,16 @@ def main() -> int:
                         ))
     parser.add_argument("--env", default=None, metavar="NAME",
                         help="backend environment: prod | stage")
+    parser.add_argument("--stage", action="store_true",
+                        help="use the stage backend (shorthand for --env stage)")
     parser.add_argument("--service-token", default=None, metavar="TOKEN",
                         help="registrar SERVICE_TOKEN used to self-onboard the bot identity")
+    parser.add_argument("--plugin-version", default=None, metavar="SPEC",
+                        help=(
+                            "install this exact version OR npm dist-tag instead of the "
+                            "latest stable (e.g. 1.1.0-rc.1, or a tag like 'next'/'test'). "
+                            "Use this to test a build before promoting it to 'latest'."
+                        ))
     args = parser.parse_args()
 
     banner()
@@ -715,24 +757,63 @@ def main() -> int:
         hdr("Reset mode (destructive)")
         reset_local_state()
 
-    # 3. Install ------------------------------------------------------------
-    hdr(f"📦 Installing {NPM_PACKAGE} into OpenClaw")
-    success, output_tail = install_plugin(openclaw_path, force=args.force)
+    # 3. Install / upgrade --------------------------------------------------
+    # --plugin-version pins an exact version/dist-tag (test builds). Otherwise:
+    # if already installed, upgrade in place; else fresh-install the latest.
+    spec = args.plugin_version
+    installed, cur_ver, latest_ver, newer = detect_plugin_state(openclaw_path)
+    if spec:
+        hdr(f"🧪 Installing {NPM_PACKAGE}@{spec}" + (f" (replacing {cur_ver})" if installed else ""))
+        _emit("installer_plugin_pinned_install",
+              {"spec": spec, "from_version": cur_ver, "was_installed": installed})
+        force = True
+    elif installed:
+        if newer:
+            hdr(f"⬆️  Upgrading {NPM_PACKAGE}: {cur_ver} → {latest_ver or 'latest'}")
+            _emit("installer_plugin_upgrade", {"from_version": cur_ver, "to_version": latest_ver})
+        elif latest_ver and cur_ver == latest_ver:
+            hdr(f"♻️  Reinstalling {NPM_PACKAGE} (already on latest: {cur_ver})")
+            _emit("installer_plugin_reinstall", {"version": cur_ver})
+        else:
+            hdr(f"⬆️  Updating {NPM_PACKAGE} to the latest version (have {cur_ver})")
+            _emit("installer_plugin_update", {"from_version": cur_ver, "to_version": latest_ver})
+        # An existing install must be force-reinstalled so npm replaces it.
+        force = True
+    else:
+        hdr(f"📦 Installing {NPM_PACKAGE} into OpenClaw")
+        _emit("installer_plugin_fresh_install", {})
+        force = bool(args.force)
+
+    success, output_tail = install_plugin(openclaw_path, force=force, spec=spec)
     if not success:
         err(f"`openclaw plugins install` failed.")
         err("Common causes:")
         err("  - npm registry unreachable from this host (proxy / offline)")
         err(f"  - The OpenClaw on this host doesn't support `plugins install` — try `{openclaw_path} --help`")
         err("  - Permissions on the OpenClaw plugins directory")
+        if spec:
+            err(f"  - The version/tag `{spec}` may not exist on npm yet")
         _emit("installer_failed", {
             "stage": "plugin_install",
             "error_class": "InstallFailed",
             "error_msg": output_tail[:200] or "no output",
             "output_tail": output_tail,
+            "spec": spec,
         })
         return 1
-    ok("Plugin installed.")
-    _emit("installer_pkg_installed", {"plugin_package": NPM_PACKAGE})
+    if spec:
+        ok(f"chat4000 plugin installed: {NPM_PACKAGE}@{spec}.")
+    elif installed and newer:
+        ok(f"Upgraded chat4000 plugin {cur_ver} → {latest_ver or 'latest'}.")
+    else:
+        ok(f"chat4000 plugin ready ({latest_ver or 'latest version'}).")
+    _emit("installer_pkg_installed", {
+        "plugin_package": NPM_PACKAGE,
+        "from_version": cur_ver,
+        "to_version": latest_ver,
+        "spec": spec,
+        "was_installed": installed,
+    })
 
     # 4. Onboard identity + pair (v2 / Matrix) -----------------------------
     # The plugin self-onboards a bot identity via the registrar (a
@@ -743,7 +824,9 @@ def main() -> int:
     # the gateway only loads channel adapters at boot, so the channel has
     # to be configured first.
     setup_cmd = [openclaw_path, "chat4000", "setup", "--self-redeem"]
-    if args.env:
+    if args.stage:
+        setup_cmd.append("--stage")        # → stage registrar + gateway
+    elif args.env:
         setup_cmd += ["--env", args.env]
     if args.service_token:
         setup_cmd += ["--service-token", args.service_token]

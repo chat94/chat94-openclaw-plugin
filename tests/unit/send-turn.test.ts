@@ -27,7 +27,7 @@ function mockClient() {
 }
 
 describe("turn / tool / status sends (PROTOCOL E)", () => {
-  it("sendToolStart relates the chat4000.tool event to the turn anchor", async () => {
+  it("sendToolStart links the tool to the turn via an ENCRYPTED field, not m.relates_to", async () => {
     const m = mockClient();
     const id = await sendToolStart(m.client, "!r:hs", "$anchor", {
       tool_id: "t1",
@@ -41,7 +41,10 @@ describe("turn / tool / status sends (PROTOCOL E)", () => {
     const c = m.sent[0].content;
     expect(c.msgtype).toBe("chat4000.tool");
     expect((c["chat4000.tool"] as { name: string }).name).toBe("bash");
-    expect(c["m.relates_to"]).toEqual({ rel_type: "chat4000.turn", event_id: "$anchor" });
+    // Linked via the encrypted content field (stays inside the ciphertext).
+    expect(c["chat4000.turn_id"]).toBe("$anchor");
+    // NOT m.relates_to — that would be lifted to cleartext and leak the grouping.
+    expect(c["m.relates_to"]).toBeUndefined();
   });
 
   it("editToolEnd is an m.replace of the tool event with the terminal status", async () => {

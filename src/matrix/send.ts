@@ -113,8 +113,12 @@ export async function sendCommandResult(
 
 // ── Turn anchoring, tool calls, agent status (PROTOCOL E) ────────────────────
 
-/** chat4000 relation type tying turn events to their anchor message. */
-const TURN_REL_TYPE = "chat4000.turn";
+/**
+ * Encrypted field that ties a turn event to its anchor message (PROTOCOL E).
+ * Deliberately NOT `m.relates_to` — the crypto SDK lifts that to cleartext, which
+ * would leak the turn structure; this plain content field stays inside the ciphertext.
+ */
+const TURN_ID_FIELD = "chat4000.turn_id";
 const TOOL_MSGTYPE = "chat4000.tool";
 
 export type ToolPayload = {
@@ -147,7 +151,8 @@ export async function sendToolStart(
     msgtype: TOOL_MSGTYPE,
     body: `[tool ${tool.name}: ${tool.status}]`,
     [TOOL_MSGTYPE]: tool,
-    "m.relates_to": { rel_type: TURN_REL_TYPE, event_id: turnId },
+    // Encrypted link to the turn anchor (NOT m.relates_to — see TURN_ID_FIELD).
+    [TURN_ID_FIELD]: turnId,
   };
   const txnId = client.makeTxnId();
   markPush(txnId, false);
